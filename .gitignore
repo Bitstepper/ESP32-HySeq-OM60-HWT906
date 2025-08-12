@@ -1,0 +1,21 @@
+# File temporanei
+*.tmp
+*.bak
+*~
+
+# Build Arduino
+build/
+*.hex
+*.elf
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backup
+*.old
+backup/
