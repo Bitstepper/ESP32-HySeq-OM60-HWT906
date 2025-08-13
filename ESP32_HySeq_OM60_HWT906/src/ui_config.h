@@ -5,29 +5,81 @@
 #include <Arduino.h>  // Solo per i tipi uint16_t, uint8_t, etc.
 
 // === COLORI RGB565 ===
-// Definizione colori base
-#define BLACK     0x0000
-#define WHITE     0xFFFF
-#define RED       0xF800
-#define GREEN     0x07E0
-#define BLUE      0x001F
-#define YELLOW    0xFFE0
-#define ORANGE    0xFD20
-#define LIGHTBLUE 0xAEDC
-#define DARKGREY  0x7BEF
+// Definizione colori base - usa quelli della libreria se disponibili
+#ifndef BLACK
+  #define BLACK     0x0000
+#endif
 
-// Colori aggiuntivi personalizzati
-#define DARKGREEN   0x03E0
-#define DARKBLUE    0x0010
-#define LIGHTRED    0xFBB2
-#define CYAN        0x07FF
-#define MAGENTA     0xF81F
-#define BROWN       0xA145
-#define PURPLE      0x780F
+#ifndef WHITE
+  #define WHITE     0xFFFF
+#endif
 
-// Alias per compatibilità con codice esistente
-#define RGB565_BLUE   BLUE
-#define RGB565_YELLOW YELLOW
+#ifndef RED
+  #define RED       0xF800
+#endif
+
+#ifndef GREEN
+  #define GREEN     0x07E0
+#endif
+
+#ifndef BLUE
+  #define BLUE      0x001F
+#endif
+
+#ifndef YELLOW
+  #define YELLOW    0xFFE0
+#endif
+
+#ifndef ORANGE
+  #define ORANGE    0xFD20
+#endif
+
+#ifndef DARKGREY
+  #define DARKGREY  0x7BEF
+#endif
+
+// Colori aggiuntivi personalizzati (non definiti dalla libreria GFX)
+#ifndef LIGHTBLUE
+  #define LIGHTBLUE 0xAEDC
+#endif
+
+#ifndef DARKGREEN
+  #define DARKGREEN   0x03E0
+#endif
+
+#ifndef DARKBLUE
+  #define DARKBLUE    0x0010
+#endif
+
+#ifndef LIGHTRED
+  #define LIGHTRED    0xFBB2
+#endif
+
+#ifndef CYAN
+  #define CYAN        0x07FF
+#endif
+
+#ifndef MAGENTA
+  #define MAGENTA     0xF81F
+#endif
+
+#ifndef BROWN
+  #define BROWN       0xA145
+#endif
+
+#ifndef PURPLE
+  #define PURPLE      0x780F
+#endif
+
+// === FIX: DEFINISCI RGB565_BLUE e RGB565_YELLOW ===
+// Se non sono definiti dalla libreria, li definiamo noi
+#ifndef RGB565_BLUE
+  #define RGB565_BLUE   0x001F  // Stesso valore di BLUE
+#endif
+
+#ifndef RGB565_YELLOW
+  #define RGB565_YELLOW 0xFFE0  // Stesso valore di YELLOW
+#endif
 
 // === PIN CONFIGURAZIONE HARDWARE ===
 // Pin per display ST7789

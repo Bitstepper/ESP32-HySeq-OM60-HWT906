@@ -1,10 +1,10 @@
 #include "leaf_actions.h"
 #include "menu_state.h"
-#include "imu_handler.h"
-#include "radar_handler.h"
+#include "hwt906_handler.h"      // MODIFICATO: era imu_handler.h
+#include "om60_handler.h"        // MODIFICATO: era radar_handler.h
 #include "display_utils.h"
 #include "ui_config.h"
-#include "sensor_tasks.h"     // Se usi FreeRTOS
+#include "sensor_tasks.h"        // Se usi FreeRTOS
 #include <Arduino_GFX_Library.h>
 #include <SD.h>
 #include <EEPROM.h>
@@ -19,7 +19,7 @@ extern UIConfig ui;
 // Questa riga dice al compilatore che esiste una funzione drawMenu
 // definita in un altro file (probabilmente display_utils.cpp).
 // Senza questa dichiarazione, il compilatore non sa cosa sia drawMenu
-// quando la incontra più avanti nel codice.
+// quando la incontra piÃ¹ avanti nel codice.
 extern void drawMenu(Arduino_GFX* gfx, UIConfig& ui, MenuState state);
 
 namespace LeafActions {
@@ -31,20 +31,104 @@ namespace LeafActions {
     // === SUBMENU 1: PITCH,YAW,DIST ===
     
     void startDataAcquisition() {
-        Serial.println("🔵 Starting data acquisition...");
+        Serial.println("Starting data acquisition...");
         actionRunning = true;
         
-        // TODO: Implementare acquisizione con timestamp
-        // - Salvare su SD card
-        // - O buffer in RAM
+        // === MODIFICA: AGGIUNGI DISPLAY INIZIALE E DEBUG ===
+        gfx->fillScreen(BLACK);
+        gfx->setCursor(50, 150);
+        gfx->setTextColor(WHITE);
+        gfx->println("Starting...");
         
-        delay(2000);  // Simulazione
+        // AGGIUNGI QUESTE RIGHE DI DEBUG
+        Serial.println("DEBUG: Start Data Acquisition");
+        Serial.printf("HWT906 present: %s\n", isHWT906Present() ? "YES" : "NO");
+        Serial.printf("OM60 present: %s\n", isOM60Present() ? "YES" : "NO");
+        
+        // === MODIFICA: CONTROLLO SENSORI CON DEMO MODE ===
+        if (!isHWT906Present() && !isOM60Present()) {
+            gfx->setTextColor(ORANGE);
+            gfx->setCursor(30, 170);
+            gfx->println("DEMO MODE - No sensors");
+            gfx->setCursor(20, 190);
+            gfx->println("Proceeding with simulation");
+            delay(2000);
+            // NON fare return - continua in modalità demo
+        } else if (!isHWT906Present() || !isOM60Present()) {
+            gfx->setTextColor(YELLOW);
+            gfx->setCursor(30, 170);
+            gfx->println("Partial sensor mode");
+            delay(1500);
+        }
+        
+        // === CONTINUA CON ACQUISIZIONE (REALE O SIMULATA) ===
+        gfx->fillScreen(BLACK);
+        gfx->setTextColor(WHITE);
+        gfx->setTextSize(2);
+        gfx->setCursor(20, 50);
+        gfx->println("ACQUIRING DATA");
+        
+        // Mostra cosa stiamo acquisendo
+        gfx->setTextSize(1);
+        gfx->setCursor(20, 100);
+        if (isHWT906Present()) {
+            gfx->setTextColor(GREEN);
+            gfx->println("✓ HWT906: Real data");
+        } else {
+            gfx->setTextColor(ORANGE);
+            gfx->println("O HWT906: Simulated");
+        }
+        
+        gfx->setCursor(20, 120);
+        if (isOM60Present()) {
+            gfx->setTextColor(GREEN);
+            gfx->println("✓ OM60: Real data");
+        } else {
+            gfx->setTextColor(ORANGE);
+            gfx->println("O OM60: Simulated");
+        }
+        
+        // Simulazione acquisizione con progress bar
+        gfx->setTextColor(WHITE);
+        gfx->setCursor(20, 160);
+        gfx->println("Progress:");
+        
+        for (int i = 0; i <= 100; i += 10) {
+            // Progress bar
+            gfx->fillRect(20, 180, i * 2, 20, GREEN);
+            gfx->drawRect(20, 180, 200, 20, WHITE);
+            
+            // Percentuale
+            gfx->fillRect(90, 205, 60, 20, BLACK);
+            gfx->setCursor(95, 208);
+            gfx->setTextSize(1);
+            gfx->setTextColor(WHITE);
+            gfx->printf("%d%%", i);
+            
+            // TODO: Qui acquisire dati reali
+            // if (isHWT906Present()) { ... }
+            // if (isOM60Present()) { ... }
+            
+            delay(200);  // Simulazione tempo acquisizione
+        }
+        
+        gfx->setCursor(60, 240);
+        gfx->setTextColor(GREEN);
+        gfx->setTextSize(2);
+        gfx->println("COMPLETE!");
+        
+        delay(2000);  // Mostra completamento
+        
         actionRunning = false;
-        Serial.println("✅ Acquisition complete");
+        Serial.println("Acquisition complete");
+        
+        // Torna al menu principale
+        setCurrentMenuState(MAIN_MENU);
+        drawMenu(gfx, ui, MAIN_MENU);
     }
     
     void showLiveData() {
-        Serial.println("📊 Showing live data...");
+        Serial.println("Showing live data...");
         actionRunning = true;
         stopRequested = false;
         
@@ -110,9 +194,9 @@ namespace LeafActions {
             }
             #else
             // Versione senza FreeRTOS
-            float distance = getFilteredRadarDistance();
-            float pitch = getIMUPitch();
-            float yaw = getIMUYaw();
+            float distance = getFilteredOM60Distance();  // MODIFICATO: era getFilteredRadarDistance()
+            float pitch = getHWT906Pitch();              // MODIFICATO: era getIMUPitch()
+            float yaw = getHWT906Yaw();                  // MODIFICATO: era getIMUYaw()
             
             // Update display
             gfx->fillRect(140, 75, 80, 30, RGB565_BLUE);
@@ -168,30 +252,88 @@ namespace LeafActions {
         actionRunning = false;
         
         // === FIX: RIDISEGNA IL MENU AUTOMATICAMENTE ===
-        // Ora questa chiamata funzionerà perché abbiamo dichiarato drawMenu sopra
+        // Ora questa chiamata funzionerÃ  perchÃ© abbiamo dichiarato drawMenu sopra
         drawMenu(gfx, ui, getCurrentMenuState());
     }
     
     void showLiveGraph() {
-        Serial.println("📈 Showing live graph...");
+        Serial.println("Showing live graph...");
         
-        // TODO: Implementare grafico real-time
-        // - Usa buffer circolare per storia
-        // - Disegna assi e griglia
-        // - Plotta ultimi N campioni
-        
+        // === MODIFICA: IMPLEMENTAZIONE DEMO GRAPH ===
         gfx->fillScreen(BLACK);
         gfx->setTextColor(WHITE);
-        gfx->setCursor(50, 150);
-        gfx->println("Graph Mode");
-        gfx->setCursor(30, 180);
-        gfx->println("Coming Soon...");
+        gfx->setTextSize(2);
+        gfx->setCursor(30, 20);
+        gfx->println("LIVE GRAPH");
         
-        delay(3000);
+        // Disegna assi
+        gfx->drawLine(30, 240, 230, 240, WHITE);  // Asse X
+        gfx->drawLine(30, 60, 30, 240, WHITE);    // Asse Y
+        
+        // Labels
+        gfx->setTextSize(1);
+        gfx->setCursor(5, 60);
+        gfx->print("1000");
+        gfx->setCursor(5, 150);
+        gfx->print("500");
+        gfx->setCursor(5, 235);
+        gfx->print("0");
+        gfx->setCursor(100, 250);
+        gfx->print("Time");
+        
+        // Back button
+        gfx->fillRect(150, 270, 80, 35, ORANGE);
+        gfx->drawRect(150, 270, 80, 35, WHITE);
+        gfx->setCursor(175, 282);
+        gfx->setTextSize(2);
+        gfx->println("BACK");
+        
+        // Demo graph animation
+        int x = 31;
+        float lastY = 150;
+        
+        while (!stopRequested) {
+            // Genera dati demo
+            float distance = isOM60Present() ? getFilteredOM60Distance() : 
+                           500.0 + sin(millis() / 1000.0) * 200;
+            
+            // Scala il valore per il grafico (60-240 pixel per 0-1000mm)
+            float y = 240 - (distance / 1000.0 * 180);
+            
+            // Disegna linea
+            if (x > 31) {
+                gfx->drawLine(x-1, lastY, x, y, GREEN);
+            }
+            
+            lastY = y;
+            x++;
+            
+            // Reset quando raggiungi il bordo
+            if (x > 230) {
+                // Pulisci area grafico
+                gfx->fillRect(31, 61, 199, 179, BLACK);
+                x = 31;
+            }
+            
+            // Check touch per BACK
+            if (touch->getTouches() > 0) {
+                auto p = touch->touchPoints[0];
+                if (p.x >= 150 && p.x <= 230 && p.y >= 270 && p.y <= 305) {
+                    delay(200);
+                    stopRequested = true;
+                    setCurrentMenuState(SUBMENU_1);
+                }
+            }
+            
+            delay(50);  // 20Hz update
+        }
+        
+        stopRequested = false;
+        drawMenu(gfx, ui, getCurrentMenuState());
     }
     
     void exportCSV() {
-        Serial.println("💾 Exporting to CSV...");
+        Serial.println("Exporting to CSV...");
         
         // TODO: Implementare export
         // - Aprire file su SD
@@ -213,7 +355,7 @@ namespace LeafActions {
     // === SUBMENU 2: CALIB. IMU ===
     
     void calibrateGyro() {
-        Serial.println("🔧 Calibrating Gyroscope...");
+        Serial.println("Calibrating Gyroscope...");
         
         gfx->fillScreen(BLACK);
         gfx->setTextColor(WHITE);
@@ -243,7 +385,7 @@ namespace LeafActions {
     }
     
     void calibrateAccel() {
-        Serial.println("🔧 Calibrating Accelerometer...");
+        Serial.println("Calibrating Accelerometer...");
         
         gfx->fillScreen(BLACK);
         gfx->setTextColor(WHITE);
@@ -268,7 +410,7 @@ namespace LeafActions {
     }
     
     void calibrateMag() {
-        Serial.println("🧲 Calibrating Magnetometer...");
+        Serial.println("Calibrating Magnetometer...");
         
         gfx->fillScreen(BLACK);
         gfx->setTextColor(WHITE);
@@ -282,7 +424,7 @@ namespace LeafActions {
         gfx->setCursor(20, 150);
         gfx->println("directions for 20 sec");
         
-        // Avvia calibrazione IMU
+        // Avvia calibrazione HWT906
         startMagCalibration();
         
         // Progress con Cancel button
@@ -337,7 +479,7 @@ namespace LeafActions {
     // === SUBMENU 3: SERVICE ===
     
     void changeSettings() {
-        Serial.println("⚙️ Opening settings...");
+        Serial.println("Opening settings...");
         
         // Menu impostazioni migliorato
         gfx->fillScreen(BLACK);
@@ -353,7 +495,7 @@ namespace LeafActions {
         gfx->setCursor(20, 100);
         gfx->println("2. Filter Parameters");
         gfx->setCursor(20, 120);
-        gfx->println("3. Radar Range");
+        gfx->println("3. OM60 Range");           // MODIFICATO: era "Radar Range"
         gfx->setCursor(20, 140);
         gfx->println("4. Sample Rate");
         
@@ -382,7 +524,7 @@ namespace LeafActions {
     }
     
     void showSystemInfo() {
-        Serial.println("ℹ️ System Information");
+        Serial.println("System Information");
         
         gfx->fillScreen(BLACK);
         gfx->setTextColor(WHITE);
@@ -392,42 +534,42 @@ namespace LeafActions {
         
         gfx->setTextSize(1);
         gfx->setCursor(20, 60);
-        gfx->println("HySeq Plus v1.0");
+        gfx->println("HySeq OM60/HWT906 v2.0");    // MODIFICATO: aggiornato nome versione
         
         gfx->setCursor(20, 80);
-        gfx->printf("Free Heap: %d KB", ESP.getFreeHeap() / 1024);
+        gfx->printf("Free Heap: %lu KB", ESP.getFreeHeap() / 1024);
         
         gfx->setCursor(20, 100);
-        gfx->printf("CPU Freq: %d MHz", ESP.getCpuFreqMHz());
+        gfx->printf("CPU Freq: %lu MHz", ESP.getCpuFreqMHz());
         
         gfx->setCursor(20, 120);
-        gfx->printf("Flash: %d MB", ESP.getFlashChipSize() / 1048576);
+        gfx->printf("Flash: %lu MB", ESP.getFlashChipSize() / 1048576);
         
         // Stato sensori
         gfx->setCursor(20, 150);
-        gfx->print("IMU: ");
-        gfx->setTextColor(isIMUReady() ? GREEN : RED);
-        gfx->println(isIMUReady() ? "OK" : "ERROR");
+        gfx->print("HWT906: ");                      // MODIFICATO: era "IMU: "
+        gfx->setTextColor(isHWT906Ready() ? GREEN : RED);    // MODIFICATO: era isIMUReady()
+        gfx->println(isHWT906Ready() ? "OK" : "ERROR");      // MODIFICATO: era isIMUReady()
         
         gfx->setTextColor(WHITE);
         gfx->setCursor(20, 170);
-        gfx->print("Radar: ");
-        gfx->setTextColor(isRadarReady() ? GREEN : RED);
-        gfx->println(isRadarReady() ? "OK" : "ERROR");
+        gfx->print("OM60: ");                        // MODIFICATO: era "Radar: "
+        gfx->setTextColor(isOM60Ready() ? GREEN : RED);      // MODIFICATO: era isRadarReady()
+        gfx->println(isOM60Ready() ? "OK" : "ERROR");        // MODIFICATO: era isRadarReady()
         
         // Test sensori in tempo reale
         gfx->setTextColor(WHITE);
         gfx->setCursor(20, 190);
         gfx->println("--- Live Sensor Data ---");
         
-        if (isIMUReady()) {
+        if (isHWT906Ready()) {                       // MODIFICATO: era isIMUReady()
             gfx->setCursor(20, 210);
-            gfx->printf("Pitch: %.1f  Yaw: %.1f", getIMUPitch(), getIMUYaw());
+            gfx->printf("Pitch: %.1f  Yaw: %.1f", getHWT906Pitch(), getHWT906Yaw());  // MODIFICATO: era getIMUPitch(), getIMUYaw()
         }
         
-        if (isRadarReady()) {
+        if (isOM60Ready()) {                         // MODIFICATO: era isRadarReady()
             gfx->setCursor(20, 230);
-            gfx->printf("Distance: %.0f mm", getFilteredRadarDistance());
+            gfx->printf("Distance: %.0f mm", getFilteredOM60Distance());  // MODIFICATO: era getFilteredRadarDistance()
         }
         
         // Statistiche
@@ -465,7 +607,7 @@ namespace LeafActions {
     }
     
     void factoryReset() {
-        Serial.println("🔄 Factory Reset!");
+        Serial.println("Factory Reset!");
         
         // Conferma
         gfx->fillScreen(BLACK);
