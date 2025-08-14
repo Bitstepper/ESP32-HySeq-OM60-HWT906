@@ -6,9 +6,11 @@
 #include "ui_config.h"
 #include "sensor_tasks.h"        // Se usi FreeRTOS
 #include <Arduino_GFX_Library.h>
-#include <SD.h>
+// #include <SD.h> rimossa perche forse NON richiesta e dà errore di compilazione
 #include <EEPROM.h>
 #include <CSE_CST328.h>
+#include "hwt906_compat.h"
+// RIMOSSO: #include "diagnostic_menu.h" - Non più necessario
 
 // Puntatori esterni
 extern Arduino_GFX* gfx;
@@ -19,7 +21,7 @@ extern UIConfig ui;
 // Questa riga dice al compilatore che esiste una funzione drawMenu
 // definita in un altro file (probabilmente display_utils.cpp).
 // Senza questa dichiarazione, il compilatore non sa cosa sia drawMenu
-// quando la incontra piÃ¹ avanti nel codice.
+// quando la incontra più avanti nel codice.
 extern void drawMenu(Arduino_GFX* gfx, UIConfig& ui, MenuState state);
 
 namespace LeafActions {
@@ -30,126 +32,164 @@ namespace LeafActions {
     
     // === SUBMENU 1: PITCH,YAW,DIST ===
     
-    void startDataAcquisition() {
-        Serial.println("Starting data acquisition...");
-        actionRunning = true;
+    void showHWT906Status() {
+        gfx->fillScreen(RGB565_BLACK);
         
-        // === MODIFICA: AGGIUNGI DISPLAY INIZIALE E DEBUG ===
-        gfx->fillScreen(BLACK);
-        gfx->setCursor(50, 150);
-        gfx->setTextColor(WHITE);
-        gfx->println("Starting...");
-        
-        // AGGIUNGI QUESTE RIGHE DI DEBUG
-        Serial.println("DEBUG: Start Data Acquisition");
-        Serial.printf("HWT906 present: %s\n", isHWT906Present() ? "YES" : "NO");
-        Serial.printf("OM60 present: %s\n", isOM60Present() ? "YES" : "NO");
-        
-        // === MODIFICA: CONTROLLO SENSORI CON DEMO MODE ===
-        if (!isHWT906Present() && !isOM60Present()) {
-            gfx->setTextColor(ORANGE);
-            gfx->setCursor(30, 170);
-            gfx->println("DEMO MODE - No sensors");
-            gfx->setCursor(20, 190);
-            gfx->println("Proceeding with simulation");
-            delay(2000);
-            // NON fare return - continua in modalità demo
-        } else if (!isHWT906Present() || !isOM60Present()) {
-            gfx->setTextColor(YELLOW);
-            gfx->setCursor(30, 170);
-            gfx->println("Partial sensor mode");
-            delay(1500);
-        }
-        
-        // === CONTINUA CON ACQUISIZIONE (REALE O SIMULATA) ===
-        gfx->fillScreen(BLACK);
-        gfx->setTextColor(WHITE);
+        // Header
+        gfx->setCursor(20, 20);
         gfx->setTextSize(2);
-        gfx->setCursor(20, 50);
-        gfx->println("ACQUIRING DATA");
-        
-        // Mostra cosa stiamo acquisendo
-        gfx->setTextSize(1);
-        gfx->setCursor(20, 100);
-        if (isHWT906Present()) {
-            gfx->setTextColor(GREEN);
-            gfx->println("✓ HWT906: Real data");
-        } else {
-            gfx->setTextColor(ORANGE);
-            gfx->println("O HWT906: Simulated");
-        }
-        
-        gfx->setCursor(20, 120);
-        if (isOM60Present()) {
-            gfx->setTextColor(GREEN);
-            gfx->println("✓ OM60: Real data");
-        } else {
-            gfx->setTextColor(ORANGE);
-            gfx->println("O OM60: Simulated");
-        }
-        
-        // Simulazione acquisizione con progress bar
         gfx->setTextColor(WHITE);
-        gfx->setCursor(20, 160);
-        gfx->println("Progress:");
+        gfx->println("HWT906 STATUS");
         
-        for (int i = 0; i <= 100; i += 10) {
-            // Progress bar
-            gfx->fillRect(20, 180, i * 2, 20, GREEN);
-            gfx->drawRect(20, 180, 200, 20, WHITE);
+        // Info statiche
+        gfx->setCursor(20, 60);
+        gfx->setTextSize(1);
+        gfx->setTextColor(YELLOW);
+        gfx->printf("Mode: Static Med  Baud: %d", HWT906_UART_SPEED);
+        
+        // BACK button
+        gfx->fillRect(80, 270, 80, 35, ORANGE);
+        gfx->drawRect(80, 270, 80, 35, WHITE);
+        gfx->setCursor(105, 282);
+        gfx->setTextSize(2);
+        gfx->setTextColor(WHITE);
+        gfx->println("BACK");
+        
+        // Touch loop standard (stile esistente)
+        while (true) {
+            // Update dati live
+            updateHWT906();
             
-            // Percentuale
-            gfx->fillRect(90, 205, 60, 20, BLACK);
-            gfx->setCursor(95, 208);
+            // Ridisegna solo valori che cambiano
+            gfx->fillRect(20, 80, 200, 60, RGB565_BLACK);
+            gfx->setCursor(20, 80);
+            gfx->setTextSize(1);
+            gfx->setTextColor(GREEN);
+            gfx->printf("STATUS: %s", isHWT906Ready() ? "CONNECTED" : "OFFLINE");
+            
+            gfx->setCursor(20, 100);
+            gfx->setTextSize(2);
+            gfx->setTextColor(CYAN);
+            gfx->printf("P: %+6.1f", getHWT906Pitch());
+            gfx->setCursor(20, 120);
+            gfx->printf("Y: %+6.1f", getHWT906Yaw());
+            
+            // Range info
+            float pitch_min, pitch_max, yaw_min, yaw_max;
+            hwt906.getRange(pitch_min, pitch_max, yaw_min, yaw_max);
+            gfx->fillRect(20, 150, 200, 20, RGB565_BLACK);  // FIX: Pulizia range
+            gfx->setCursor(20, 150);
             gfx->setTextSize(1);
             gfx->setTextColor(WHITE);
-            gfx->printf("%d%%", i);
+            gfx->printf("Range P: %.1f/%.1f", pitch_min, pitch_max);
+            gfx->setCursor(20, 165);
+            gfx->printf("Range Y: %.1f/%.1f", yaw_min, yaw_max);
             
-            // TODO: Qui acquisire dati reali
-            // if (isHWT906Present()) { ... }
-            // if (isOM60Present()) { ... }
+            // Performance stats
+            const HWT906Data& data = hwt906.getData();
+            gfx->fillRect(20, 190, 200, 30, RGB565_BLACK);  // FIX: Pulizia performance
+            gfx->setCursor(20, 190);
+            gfx->setTextColor(GREEN);
+            gfx->printf("UPDATE: %.1fHz", data.update_rate);
+            gfx->setCursor(20, 205);
+            gfx->printf("Frames: %lu (Err: %lu)", data.frame_count, data.error_frames);
             
-            delay(200);  // Simulazione tempo acquisizione
+            // Pulsanti CONFIG/CALIB
+            gfx->fillRect(20, 230, 70, 25, RGB565_DARKGREY);
+            gfx->drawRect(20, 230, 70, 25, WHITE);
+            gfx->setCursor(30, 240);
+            gfx->setTextSize(1);
+            gfx->setTextColor(WHITE);
+            gfx->println("CONFIG");
+
+            gfx->fillRect(110, 230, 70, 25, RGB565_DARKGREY);
+            gfx->drawRect(110, 230, 70, 25, WHITE);
+            gfx->setCursor(125, 240);
+            gfx->println("CALIB");
+            
+            // Check TOUCH
+            if (touch->getTouches() > 0) {
+                auto p = touch->touchPoints[0];
+                
+                // BACK button
+                if (p.x >= 80 && p.x <= 160 && p.y >= 270 && p.y <= 305) {
+                    delay(200);
+                    setCurrentMenuState(SUBMENU_1);
+                    drawMenu(gfx, ui, SUBMENU_1);
+                    return;
+                }
+                
+                // CONFIG button
+                if (p.x >= 20 && p.x <= 90 && p.y >= 230 && p.y <= 255) {
+                    delay(200);
+                    showHWT906Config();
+                    return;
+                }
+                
+                // CALIB button  
+                if (p.x >= 110 && p.x <= 180 && p.y >= 230 && p.y <= 255) {
+                    delay(200);
+                    showHWT906Calib();
+                    return;
+                }
+            }
+            
+            delay(100); // 10Hz update
         }
-        
-        gfx->setCursor(60, 240);
-        gfx->setTextColor(GREEN);
-        gfx->setTextSize(2);
-        gfx->println("COMPLETE!");
-        
-        delay(2000);  // Mostra completamento
-        
-        actionRunning = false;
-        Serial.println("Acquisition complete");
-        
-        // Torna al menu principale
-        setCurrentMenuState(MAIN_MENU);
-        drawMenu(gfx, ui, MAIN_MENU);
     }
     
     void showLiveData() {
         Serial.println("Showing live data...");
-        actionRunning = true;
-        stopRequested = false;
         
-        // Setup display
-        gfx->fillScreen(RGB565_BLUE);
+        // SOLUZIONE 1: Setup solo quando entri nel menu
+        static MenuState last_state = MAIN_MENU;
+        MenuState current_state = getCurrentMenuState();
         
-        // Header
-        gfx->setTextColor(YELLOW);
-        gfx->setTextSize(3);
-        gfx->setCursor(50, 20);
-        gfx->println("LIVE DATA");
+        if (last_state != DISPLAY_LIVE_DATA && current_state == DISPLAY_LIVE_DATA) {
+            stopRequested = false;
+            
+            // Setup display
+            gfx->fillScreen(RGB565_BLUE);
+            
+            // Header
+            gfx->setTextColor(YELLOW);
+            gfx->setTextSize(3);
+            gfx->setCursor(50, 20);
+            gfx->println("LIVE DATA");
+            
+            // Labels
+            gfx->setTextSize(2);
+            gfx->setTextColor(WHITE);
+            gfx->setCursor(20, 80);
+            gfx->println("Distance:");
+            gfx->setCursor(20, 140);
+            gfx->println("Pitch:");
+            gfx->setCursor(20, 200);
+            gfx->println("Yaw:");
+            
+            // === AGGIUNGI QUESTO BLOCCO BACK BUTTON ===
+            const int BACK_X = 20;
+            const int BACK_Y = 270;
+            const int BACK_W = 80;
+            const int BACK_H = 35;
+            
+            gfx->fillRect(BACK_X, BACK_Y, BACK_W, BACK_H, ORANGE);
+            gfx->drawRect(BACK_X, BACK_Y, BACK_W, BACK_H, WHITE);
+            gfx->setCursor(BACK_X + 15, BACK_Y + 10);
+            gfx->setTextSize(2);
+            gfx->setTextColor(WHITE);
+            gfx->println("BACK");
+            
+            // Debug area touch
+            gfx->setTextSize(1);
+            gfx->setCursor(120, 275);
+            gfx->printf("Touch: %d,%d to %d,%d", BACK_X, BACK_Y, BACK_X+BACK_W, BACK_Y+BACK_H);
+            // === FINE BLOCCO BACK BUTTON ===
+
+            Serial.println("Live Data display setup complete");
+        }
         
-        // Labels
-        gfx->setTextSize(2);
-        gfx->setTextColor(WHITE);
-        gfx->setCursor(20, 80);
-        gfx->println("Distance:");
-        gfx->setCursor(20, 140);
-        gfx->println("Pitch:");
-        gfx->setCursor(20, 200);
-        gfx->println("Yaw:");
+        last_state = current_state;  // ← AGGIUNGI QUI   
         
         // === BACK BUTTON CON COORDINATE CORRETTE ===
         const int BACK_X = 20;
@@ -157,103 +197,90 @@ namespace LeafActions {
         const int BACK_W = 80;
         const int BACK_H = 35;
         
-        gfx->fillRect(BACK_X, BACK_Y, BACK_W, BACK_H, ORANGE);
-        gfx->drawRect(BACK_X, BACK_Y, BACK_W, BACK_H, WHITE);
-        gfx->setCursor(BACK_X + 15, BACK_Y + 10);
-        gfx->setTextSize(2);
-        gfx->setTextColor(WHITE);
-        gfx->println("BACK");
+        if (actionRunning) {
+            gfx->fillRect(BACK_X, BACK_Y, BACK_W, BACK_H, ORANGE);
+            gfx->drawRect(BACK_X, BACK_Y, BACK_W, BACK_H, WHITE);
+            gfx->setCursor(BACK_X + 15, BACK_Y + 10);
+            gfx->setTextSize(2);
+            gfx->setTextColor(WHITE);
+            gfx->println("BACK");
+            
+            // === DEBUG: Mostra area touch ===
+            gfx->setTextSize(1);
+            gfx->setCursor(120, 275);
+            gfx->printf("Touch: %d,%d to %d,%d", BACK_X, BACK_Y, BACK_X+BACK_W, BACK_Y+BACK_H);
+            
+            actionRunning = false; // Per evitare ridisegno continuo
+        }
         
-        // === DEBUG: Mostra area touch ===
-        gfx->setTextSize(1);
-        gfx->setCursor(120, 275);
-        gfx->printf("Touch: %d,%d to %d,%d", BACK_X, BACK_Y, BACK_X+BACK_W, BACK_Y+BACK_H);
-        
-        // Live update loop con gestione touch integrata
-        while (!stopRequested && isInLiveDataMode()) {
-            // === UPDATE DATI ===
-            #ifdef USE_FREERTOS
-            SensorData data;
-            if (getLatestSensorData(data)) {
-                // Distanza
-                gfx->fillRect(140, 75, 80, 30, RGB565_BLUE);
-                gfx->setCursor(140, 80);
-                gfx->setTextColor(YELLOW);
-                gfx->setTextSize(2);
-                gfx->printf("%4.0f mm", data.filtered_distance_mm);
-                
-                // Pitch
-                gfx->fillRect(140, 135, 80, 30, RGB565_BLUE);
-                gfx->setCursor(140, 140);
-                gfx->printf("%+6.1f", data.pitch);
-                
-                // Yaw
-                gfx->fillRect(140, 195, 80, 30, RGB565_BLUE);
-                gfx->setCursor(140, 200);
-                gfx->printf("%5.1f", data.yaw);
-            }
-            #else
-            // Versione senza FreeRTOS
-            float distance = getFilteredOM60Distance();  // MODIFICATO: era getFilteredRadarDistance()
-            float pitch = getHWT906Pitch();              // MODIFICATO: era getIMUPitch()
-            float yaw = getHWT906Yaw();                  // MODIFICATO: era getIMUYaw()
+        // === UPDATE DATI ===
+        static uint32_t lastUpdate = 0;
+        if (millis() - lastUpdate > 100) {  // 10Hz
+            
+            // FIX: Pulisce SOLO l'area valori, non le etichette
+            gfx->fillRect(140, 75, 100, 30, RGB565_BLUE);   // Solo area Distance
+            gfx->fillRect(140, 135, 100, 30, RGB565_BLUE);  // Solo area Pitch  
+            gfx->fillRect(140, 195, 100, 30, RGB565_BLUE);  // Solo area Yaw
+            
+            // Versione unificata - RIMUOVO COMPLETAMENTE #ifdef USE_FREERTOS
+            float distance = getFilteredOM60Distance();
+            float pitch = getHWT906Pitch();
+            float yaw = getHWT906Yaw();
+            
+            // DEBUG che cerchi - SEMPRE ESEGUITO
+            Serial.printf("📊 LIVE UPDATE: P=%.1f Y=%.1f D=%.0f\n", pitch, yaw, distance);
             
             // Update display
-            gfx->fillRect(140, 75, 80, 30, RGB565_BLUE);
             gfx->setCursor(140, 80);
             gfx->setTextColor(YELLOW);
             gfx->setTextSize(2);
             gfx->printf("%4.0f mm", distance);
             
-            gfx->fillRect(140, 135, 80, 30, RGB565_BLUE);
             gfx->setCursor(140, 140);
             gfx->printf("%+6.1f", pitch);
             
-            gfx->fillRect(140, 195, 80, 30, RGB565_BLUE);
             gfx->setCursor(140, 200);
             gfx->printf("%5.1f", yaw);
-            #endif
             
-            // === CHECK TOUCH DIRETTAMENTE QUI ===
-            if (touch->getTouches() > 0) {
-                auto p = touch->touchPoints[0];
-                
-                // Debug: mostra coordinate touch
-                gfx->fillRect(120, 290, 100, 20, RGB565_BLUE);
-                gfx->setCursor(120, 290);
-                gfx->setTextSize(1);
-                gfx->setTextColor(WHITE);
-                gfx->printf("X:%d Y:%d", p.x, p.y);
-                
-                // Check BACK button con margine
-                if (p.x >= (BACK_X - 10) && p.x <= (BACK_X + BACK_W + 10) && 
-                    p.y >= (BACK_Y - 10) && p.y <= (BACK_Y + BACK_H + 10)) {
-                    
-                    // Feedback visivo
-                    gfx->fillRect(BACK_X, BACK_Y, BACK_W, BACK_H, RED);
-                    gfx->drawRect(BACK_X, BACK_Y, BACK_W, BACK_H, WHITE);
-                    gfx->setCursor(BACK_X + 15, BACK_Y + 10);
-                    gfx->setTextSize(2);
-                    gfx->setTextColor(WHITE);
-                    gfx->println("BACK");
-                    
-                    delay(200);  // Debounce
-                    
-                    // Esci dal loop
-                    stopRequested = true;
-                    setCurrentMenuState(SUBMENU_1);  // Torna al submenu
-                    Serial.println("Back pressed - exiting live data");
-                }
-            }
-            
-            delay(100);  // 10Hz update
+            lastUpdate = millis();
         }
-        
-        actionRunning = false;
-        
-        // === FIX: RIDISEGNA IL MENU AUTOMATICAMENTE ===
-        // Ora questa chiamata funzionerÃ  perchÃ© abbiamo dichiarato drawMenu sopra
-        drawMenu(gfx, ui, getCurrentMenuState());
+      
+        // === CHECK TOUCH DIRETTAMENTE QUI ===
+        if (touch->getTouches() > 0) {
+            auto p = touch->touchPoints[0];
+            
+            // Debug: mostra coordinate touch
+            gfx->fillRect(120, 290, 100, 20, RGB565_BLUE);
+            gfx->setCursor(120, 290);
+            gfx->setTextSize(1);
+            gfx->setTextColor(WHITE);
+            gfx->printf("X:%d Y:%d", p.x, p.y);
+            
+            // Check BACK button con margine
+            if (p.x >= (BACK_X - 10) && p.x <= (BACK_X + BACK_W + 10) && 
+                p.y >= (BACK_Y - 10) && p.y <= (BACK_Y + BACK_H + 10)) {
+                
+                // Feedback visivo
+                gfx->fillRect(BACK_X, BACK_Y, BACK_W, BACK_H, RED);
+                gfx->drawRect(BACK_X, BACK_Y, BACK_W, BACK_H, WHITE);
+                gfx->setCursor(BACK_X + 15, BACK_Y + 10);
+                gfx->setTextSize(2);
+                gfx->setTextColor(WHITE);
+                gfx->println("BACK");
+                
+                delay(200);  // Debounce
+                
+                // Esci dal loop
+                stopRequested = true;
+     
+                setCurrentMenuState(SUBMENU_1);  // Torna al submenu
+                Serial.println("Back pressed - exiting live data");
+                
+                // === FIX: RIDISEGNA IL MENU AUTOMATICAMENTE ===
+                drawMenu(gfx, ui, getCurrentMenuState());
+                return;
+            }
+        }
     }
     
     void showLiveGraph() {
@@ -332,24 +359,120 @@ namespace LeafActions {
         drawMenu(gfx, ui, getCurrentMenuState());
     }
     
-    void exportCSV() {
-        Serial.println("Exporting to CSV...");
+    void showHWT906Config() {
+        gfx->fillScreen(RGB565_BLACK);
         
-        // TODO: Implementare export
-        // - Aprire file su SD
-        // - Scrivere header CSV
-        // - Scrivere dati buffer
+        // Header
+        gfx->setCursor(20, 20);
+        gfx->setTextSize(2);
+        gfx->setTextColor(WHITE);
+        gfx->println("HWT906 CONFIG");
         
-        gfx->fillScreen(BLACK);
-        gfx->setTextColor(GREEN);
-        gfx->setCursor(50, 150);
-        gfx->println("Exporting...");
+        // Contenuto statico
+        gfx->setCursor(20, 60);
+        gfx->setTextSize(1);
+        gfx->setTextColor(WHITE);
+        gfx->println("Precision Modes:");
+        gfx->setCursor(20, 80);
+        gfx->println("0 = Static Low (5Hz)");
+        gfx->setCursor(20, 95);
+        gfx->setTextColor(YELLOW);
+        gfx->println("1 = Static Med (10Hz) [ACTIVE]");
+        gfx->setTextColor(WHITE);
+        gfx->setCursor(20, 110);
+        gfx->println("2 = Static High (20Hz)");
+        gfx->setCursor(20, 125);
+        gfx->println("3 = Dynamic (50Hz)");
         
-        delay(2000);
+        gfx->setCursor(20, 160);
+        gfx->println("Dead Zones:");
+        gfx->setCursor(20, 175);
+        gfx->printf("Pitch: %.2f  Yaw: %.2f", 0.1f, 0.15f);
         
-        gfx->setCursor(50, 180);
-        gfx->println("Complete!");
-        delay(1000);
+        gfx->setCursor(20, 210);
+        gfx->println("Drift Compensation: ENABLED");
+        
+        // BACK button
+        gfx->fillRect(80, 270, 80, 35, ORANGE);
+        gfx->drawRect(80, 270, 80, 35, WHITE);
+        gfx->setCursor(105, 282);
+        gfx->setTextSize(2);
+        gfx->setTextColor(WHITE);
+        gfx->println("BACK");
+        
+        // Touch loop standard
+        while (true) {
+            if (touch->getTouches() > 0) {
+                auto p = touch->touchPoints[0];
+                if (p.x >= 80 && p.x <= 160 && p.y >= 270 && p.y <= 305) {
+                    delay(200);
+                    showHWT906Status();  // Torna al STATUS
+                    return;
+                }
+            }
+            delay(50);
+        }
+    }
+    
+    void showHWT906Calib() {
+        gfx->fillScreen(RGB565_BLACK);
+        
+        // Header
+        gfx->setCursor(20, 20);
+        gfx->setTextSize(2);
+        gfx->setTextColor(WHITE);
+        gfx->println("HWT906 CALIBRATION");
+        
+        // BACK button
+        gfx->fillRect(80, 270, 80, 35, ORANGE);
+        gfx->drawRect(80, 270, 80, 35, WHITE);
+        gfx->setCursor(105, 282);
+        gfx->setTextSize(2);
+        gfx->setTextColor(WHITE);
+        gfx->println("BACK");
+        
+        // Touch loop con live data
+        while (true) {
+            const HWT906Data& data = hwt906.getData();
+            
+            // Pulisci e ridisegna contenuto live
+            gfx->fillRect(20, 60, 200, 200, RGB565_BLACK);
+            
+            gfx->setCursor(20, 60);
+            gfx->setTextSize(1);
+            gfx->setTextColor(WHITE);
+            gfx->println("Current Offsets:");
+            gfx->setCursor(20, 80);
+            gfx->printf("Pitch: %+6.2f", data.pitch_offset);
+            gfx->setCursor(20, 95);
+            gfx->printf("Yaw:   %+6.2f", data.yaw_offset);
+            gfx->setCursor(20, 110);
+            gfx->printf("Roll:  %+6.2f", data.roll_offset);
+            
+            gfx->setCursor(20, 140);
+            gfx->println("Raw Values (Live):");
+            gfx->setCursor(20, 160);
+            gfx->printf("Pitch: %+6.2f", data.pitch_raw);
+            gfx->setCursor(20, 175);
+            gfx->printf("Yaw:   %+6.2f", data.yaw_raw);
+            gfx->setCursor(20, 190);
+            gfx->printf("Roll:  %+6.2f", data.roll_raw);
+            
+            gfx->setCursor(20, 220);
+            gfx->setTextColor(YELLOW);
+            gfx->println("Touch BACK to return");
+            
+            // Check touch
+            if (touch->getTouches() > 0) {
+                auto p = touch->touchPoints[0];
+                if (p.x >= 80 && p.x <= 160 && p.y >= 270 && p.y <= 305) {
+                    delay(200);
+                    showHWT906Status();  // Torna al STATUS
+                    return;
+                }
+            }
+            delay(200); // 5Hz update per calibrazione
+        }
     }
     
     // === SUBMENU 2: CALIB. IMU ===
@@ -704,4 +827,5 @@ namespace LeafActions {
     bool isActionRunning() {
         return actionRunning;
     }
-}
+    
+} // Fine namespace LeafActions

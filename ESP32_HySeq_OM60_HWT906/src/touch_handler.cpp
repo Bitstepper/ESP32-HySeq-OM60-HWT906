@@ -212,26 +212,25 @@ void handleMainMenuSelection(int index, Arduino_GFX* gfx, UIConfig& ui) {
 }
 
 // === GESTIONE SUBMENU 1 (PITCH,YAW,DIST) ===
+// === GESTIONE SUBMENU 1 (PITCH,YAW,DIST) ===
 void handleSubmenu1Selection(int index, Arduino_GFX* gfx, UIConfig& ui) {
     switch (index) {
-        case 0: // Start Acquis.
-            showMessage(gfx, "Starting...", WHITE, BLACK);
-            LeafActions::startDataAcquisition();
+        case 0: // "HWT906 Status" (era Start Acquis)
+            showMessage(gfx, "Loading status...", WHITE, BLACK);
+            LeafActions::showHWT906Status();
             break;
             
-        case 1: // Live Graph
+        case 1: // Live Graph (INVARIATO)
             setCurrentMenuState(DISPLAY_LIVE_DATA);
             LeafActions::showLiveData();
             return; // Non ridisegnare menu
             
-        case 2: // Export CSV
-            showMessage(gfx, "Exporting...", WHITE, BLACK);
-            LeafActions::exportCSV();
+        case 2: // "HWT906 Config" (era Export CSV)
+            showMessage(gfx, "Loading config...", WHITE, BLACK);
+            LeafActions::showHWT906Config();
             break;
     }
     
-    // Ridisegna menu dopo azione
-    delay(1000);
     drawMenu(gfx, ui, getCurrentMenuState());
 }
 

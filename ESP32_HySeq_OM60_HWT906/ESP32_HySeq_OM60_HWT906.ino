@@ -21,6 +21,8 @@
 #include <Wire.h>
 //#include <EEPROM.h>  - rimosso e sostituito da Preferences.h in hwt906_handler.cpp
 
+
+
 // === MODULI UI (invariati) ===
 #include "src/ui_config.h"
 #include "src/display_utils.h"
@@ -28,10 +30,14 @@
 #include "src/menu_state.h"
 #include "src/service_menu.h"
 #include "src/leaf_actions.h"
+// Include menu diagnostico
+#include "src/diagnostic_menu.h"
+
 
 // === NUOVI HANDLER SENSORI ===
 #include "src/om60_handler.h"     // Nuovo sensore distanza
 #include "src/hwt906_handler.h"   // Nuovo IMU
+#include "src/hwt906_compat.h"  // <-- AGGIUNGI QUESTA RIGA
 
 // === CONFIGURAZIONE PIN DISPLAY ===
 #define LCD_CS      42
@@ -65,6 +71,8 @@ uint32_t lastSensorUpdate = 0;
 uint32_t lastDisplayUpdate = 0;
 const uint32_t SENSOR_UPDATE_INTERVAL = 100;  // 10Hz
 const uint32_t DISPLAY_UPDATE_INTERVAL = 100; // 10Hz
+
+
 
 // === FUNZIONE ESTERNA DAL MODULO display_utils ===
 extern void drawMenu(Arduino_GFX* gfx, UIConfig& ui, MenuState state);
@@ -113,9 +121,9 @@ void setup() {
     // EEPROM.begin(512);
     
     // === CONFIGURAZIONE UI ===
-    ui.topLine = (char*)"HySeq OM60";
-    ui.botLine = (char*)"by Picobarn - v2.0";
-    ui.bgColor = RGB565_BLUE;
+    ui.topLine = (char*)"HySeq PLUS";
+    ui.botLine = (char*)"by Picobarn - v2.0_60.906";
+    ui.bgColor = LIGHTBLUE;
     ui.textColor = WHITE;
     // ui.highlightColor = YELLOW;
     
@@ -131,24 +139,53 @@ void setup() {
    
     Serial.println("\n📡 Inizializzazione sensori...");
     
-    // HWT906 (IMU)
-    bool hwt906_ok = initHWT906();
-    if (isHWT906Present()) {
-        gfx->setCursor(20, 140);
-        gfx->setTextColor(GREEN);
-        gfx->println("✓ HWT906 IMU OK");
-        Serial.println("✅ HWT906 inizializzato correttamente");
-        
-        // Configura per uso statico se presente
-        configureHWT906Mode(HWT906_MODE_STATIC_MED);
-        enableHWT906DriftCompensation(true);
-    } else {
-        gfx->setCursor(20, 140);
-        gfx->setTextColor(ORANGE);
-        gfx->println("⚠ HWT906 non trovato");
-        Serial.println("⚠️ HWT906 non trovato - continuo senza IMU");
+// HWT906 (IMU)
+bool hwt906_ok = initHWT906();
+gfx->setCursor(20, 140);
+gfx->setTextColor(CYAN);
+gfx->println("⚙ HWT906 inizializzazione...");
+Serial.println("🔄 HWT906 inizializzato - verifica in corso...");
+
+// Nel setup(), dopo initHWT906():
+Serial.println("\n🔍 DIAGNOSTIC UART HWT906...");
+Serial2.begin(9600, SERIAL_8N1, 44, 43);
+delay(100);
+
+for(int i = 0; i < 50; i++) {
+    if(Serial2.available()) {
+        uint8_t byte = Serial2.read();
+        Serial.printf("UART RX[%d]: 0x%02X (%c)\n", i, byte, 
+                     (byte >= 32 && byte <= 126) ? byte : '.');
     }
-    
+    delay(10);
+}
+
+if (Serial2.available() == 0) {
+    Serial.println("❌ Nessun dato UART ricevuto!");
+    Serial.println("   Verifica: connessioni, alimentazione, baud rate");
+} else {
+    Serial.println("✅ Dati UART rilevati!");
+}
+
+
+
+// Configurazione ottimizzata
+configureHWT906Mode(HWT906_MODE_STATIC_MED);
+enableHWT906DriftCompensation(true);
+
+/*
+  // Test comunicazione diretta
+Serial.println("Test UART HWT906...");
+Serial2.begin(9600, SERIAL_8N1, 44, 43);
+delay(100);
+for(int i = 0; i < 10; i++) {
+    if(Serial2.available()) {
+        Serial.printf("UART byte %d: 0x%02X\n", i, Serial2.read());
+    }
+    delay(10);
+}
+*/
+
     // OM60 (Distanza) - Per ora simulato
     bool om60_ok = false;  // initOM60() quando disponibile
     gfx->setCursor(20, 160);
@@ -202,10 +239,8 @@ void loop() {
         if (currentTime - lastSensorUpdate >= SENSOR_UPDATE_INTERVAL) {
             lastSensorUpdate = currentTime;
             
-            // Update HWT906 se presente
-            if (isHWT906Present()) {
-                updateHWT906();
-            }
+// Update HWT906 sempre (per permettere rilevamento iniziale)
+updateHWT906();
             
             // Update OM60 quando implementato
             // if (isOM60Present()) {
@@ -223,8 +258,15 @@ void loop() {
         if (currentTime - lastDisplayUpdate >= DISPLAY_UPDATE_INTERVAL) {
             lastDisplayUpdate = currentTime;
             // L'update è gestito da leaf_actions.cpp
+        // ✅ AGGIUNTA MANCANTE: Chiamata effettiva alla funzione!
+        LeafActions::showLiveData();
         }
     }
+
+// === UPDATE MENU DIAGNOSTICO ===
+// CORRETTO (con namespace):
+// LeafActions::updateDiagnosticMenu();
+
     
     // === DIAGNOSTICA PERIODICA ===
     static uint32_t lastDiagnostic = 0;
@@ -309,15 +351,20 @@ void printSystemStatus() {
     Serial.printf("Free heap: %lu bytes\n", ESP.getFreeHeap());
     Serial.printf("CPU freq: %lu MHz\n", ESP.getCpuFreqMHz());
     
-    // Stato sensori
-    Serial.println("\nSensori:");
-    if (isHWT906Present()) {
-        Serial.printf("  HWT906: OK (%.1f Hz)\n", getHWT906UpdateRate());
-        Serial.printf("    Pitch: %.1f°  Yaw: %.1f°\n", 
-                      getHWT906Pitch(), getHWT906Yaw());
+// Stato sensori
+Serial.println("\nSensori:");
+if (isHWT906Present()) {
+    Serial.printf("  HWT906: ✅ PRESENTE (%.1f Hz)\n", getHWT906UpdateRate());
+    Serial.printf("    Pitch: %.1f°  Yaw: %.1f°\n", 
+                  getHWT906Pitch(), getHWT906Yaw());
+} else {
+    // Dai più tempo al sensore per essere rilevato
+    if (millis() < 10000) {
+        Serial.println("  HWT906: 🔄 Inizializzazione in corso...");
     } else {
-        Serial.println("  HWT906: NON PRESENTE");
+        Serial.println("  HWT906: ❌ Timeout rilevamento");
     }
+}
     
     // OM60 quando implementato
     Serial.println("  OM60: NON IMPLEMENTATO");
@@ -356,6 +403,7 @@ void handleSerialCommands() {
         Serial.println("Comando non riconosciuto. Digita HELP");
     }
 }
+
 
 
 

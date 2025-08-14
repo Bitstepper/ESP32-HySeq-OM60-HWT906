@@ -7,11 +7,12 @@
 // Namespace per organizzare le azioni
 namespace LeafActions {
     
-    // === SUBMENU 1: PITCH,YAW,DIST ===
-    void startDataAcquisition();
-    void showLiveData();
-    void showLiveGraph();
-    void exportCSV();
+// === SUBMENU 1: PITCH,YAW,DIST ===
+void showHWT906Status();        // Era startAcquisition()
+void showLiveData();           // INVARIATO
+void showLiveGraph();          // INVARIATO  
+void showHWT906Config();       // Era exportCSV
+void showHWT906Calib(); 
     
     // === SUBMENU 2: CALIB. IMU ===
     void calibrateGyro();
@@ -26,6 +27,7 @@ namespace LeafActions {
     // === UTILITY ===
     void stopCurrentAction();
     bool isActionRunning();
+    void updateDiagnosticMenu();    // ← AGGIUNTA
 }
 
 #endif // LEAF_ACTIONS_H
