@@ -1,6 +1,8 @@
 // hwt906_handler.cpp - Implementazione completa basata su WIT9-proto funzionante
 // Include TUTTI i filtri, drift compensation e parsing robusto
 // VERSIONE CORRETTA - Allineata agli errori di compilazione
+// STEP X1: AGGIUNTA SALVATAGGIO VALORI RAW per test ripetibilità 
+// STEP X2: DUAL-MODE QUATERNIONS + EULER per anti-gimbal lock
 
 #include "hwt906_handler.h"
 
@@ -11,16 +13,42 @@ HWT906Handler hwt906;
 #define HWT906_RX_PIN 44
 #define HWT906_TX_PIN 43
 
+// === FRAME DEFINITIONS AGGIUNTIVE ===
+#define FRAME_QUATERNION 0x59
+
 // === IMPLEMENTAZIONE CLASSE PRINCIPALE ===
 
 bool HWT906Handler::init(HardwareSerial* serial_port) {
-    Serial.println("\n=== HWT906 INIT - WIT9-proto Enhanced ===");
+    Serial.println("\n=== HWT906 INIT - WIT9-proto Enhanced + Dual-Mode ===");
     
     uart = serial_port;
     
     // UART init 
     uart->begin(HWT906_UART_SPEED, SERIAL_8N1, HWT906_RX_PIN, HWT906_TX_PIN); // 9600, 44, 43
     uart->setTimeout(10);
+    
+    // === STEP X1: INIT RAW DATA ===
+    rawData.pitch_raw_uart = 0.0f;
+    rawData.yaw_raw_uart = 0.0f;
+    rawData.roll_raw_uart = 0.0f;
+    rawData.timestamp_raw = 0;
+    rawData.valid = false;
+    
+    // === STEP X2: INIT QUATERNION DATA ===
+    currentData.qw_raw = 1.0f;  // Identity quaternion
+    currentData.qx_raw = 0.0f;
+    currentData.qy_raw = 0.0f;
+    currentData.qz_raw = 0.0f;
+    currentData.qw_filtered = 1.0f;
+    currentData.qx_filtered = 0.0f;
+    currentData.qy_filtered = 0.0f;
+    currentData.qz_filtered = 0.0f;
+    currentData.quaternion_available = false;
+    currentData.gimbal_lock_detected = false;
+    currentData.quaternion_mode_active = false;
+    currentData.last_quaternion_time = 0;
+    currentData.quaternion_frames_received = 0;
+    currentData.euler_frames_received = 0;
     
     // Init strutture filtri
     initAdvancedFilters();
@@ -32,11 +60,11 @@ bool HWT906Handler::init(HardwareSerial* serial_port) {
     // I2C init per configurazione
     Wire.begin();
     
-    // Configura modalità statica ottimizzata
+    // Configura modalità statica ottimizzata con dual-mode
     bool config_ok = configureStaticOptimized(current_mode);
     
     if (config_ok) {
-        Serial.printf("✅ HWT906 Configured: %s\n", precision_configs[current_mode].description);
+        Serial.printf("✅ HWT906 Configured: %s (DUAL-MODE)\n", precision_configs[current_mode].description);
         
         // Test di comunicazione UART
         delay(500);
@@ -54,7 +82,7 @@ bool HWT906Handler::init(HardwareSerial* serial_port) {
         sensors_ready = (valid_frames >= 3);
         
         if (sensors_ready) {
-            Serial.printf("✅ HWT906 Ready - %d valid frames\n", valid_frames);
+            Serial.printf("✅ HWT906 Ready - %d valid frames (Dual-Mode enabled)\n", valid_frames);
             currentData.last_frame_time = millis();
         } else {
             Serial.println("❌ HWT906 UART Communication Failed");
@@ -67,13 +95,21 @@ bool HWT906Handler::init(HardwareSerial* serial_port) {
 }
 
 bool HWT906Handler::configureStaticOptimized(HWT906PrecisionMode mode) {
-    Serial.printf("\n=== STATIC CONFIG: %s ===\n", precision_configs[mode].description);
+    Serial.printf("\n=== STATIC CONFIG DUAL-MODE: %s ===\n", precision_configs[mode].description);
     
     // Unlock per scrittura registri
     if (!unlockHWT906()) {
         Serial.println("❌ Unlock failed");
         return false;
     }
+    
+    // === STEP X2: ENABLE DUAL OUTPUT (ANGLE + QUATERNIONS) ===
+    Serial.println("🔄 Enabling dual-mode output: Euler + Quaternions...");
+    if (!writeRegister(0x02, 0x021E)) {  // ANGLE(0x53) + QUATER(0x59) + ACC + GYRO + MAG
+        Serial.println("❌ Dual mode config failed");
+        return false;
+    }
+    delay(200);  // Extra delay for dual-mode
     
     // CRITICO: Range ridotti per massima risoluzione (dal WIT9-proto)
     Serial.println("Setting reduced ranges for max resolution...");
@@ -93,7 +129,7 @@ bool HWT906Handler::configureStaticOptimized(HWT906PrecisionMode mode) {
         return false;
     }
     
-    // Algoritmo 9-assi per stabilità
+    // Algoritmo 9-assi per stabilità 
     if (!writeRegister(0x24, 0x0000)) {  // 9-axis
         Serial.println("❌ Algorithm mode failed");
         return false;
@@ -120,7 +156,7 @@ bool HWT906Handler::configureStaticOptimized(HWT906PrecisionMode mode) {
     delay(500); // Stabilizzazione
     current_mode = mode;
     
-    Serial.println("✅ Static configuration completed");
+    Serial.println("✅ Dual-mode static configuration completed");
     return true;
 }
 
@@ -204,8 +240,15 @@ bool HWT906Handler::parseFrame(uint8_t* frame) {
     switch (frame_type) {
         case FRAME_ANGLE:
             processAngleFrame(frame);
+            currentData.euler_frames_received++;
             return true;
         
+        // === STEP X2: NUOVO CASE PER QUATERNIONI ===
+        case FRAME_QUATERNION:  // 0x59
+            processQuaternionFrame(frame);
+            currentData.quaternion_frames_received++;
+            return true;
+            
         case FRAME_ACCEL:
             processAccelFrame(frame);
             return true;
@@ -231,8 +274,20 @@ void HWT906Handler::processAngleFrame(uint8_t* frame) {
     
     // Conversione in gradi (32768 = 180°)
     currentData.roll_raw = ((float)roll_raw / 32768.0f) * 180.0f;
-    currentData.pitch_raw = ((float)pitch_raw / 32768.0f) * 180.0f;
+    currentData.pitch_raw = ((float)pitch_raw / 32768.0f) * 90.0f;
     currentData.yaw_raw = ((float)yaw_raw / 32768.0f) * 180.0f;
+    
+    // === STEP X1: SALVA VALORI RAW PRIMA DI QUALSIASI PROCESSING ===
+    // Questo è il momento CRITICO per catturare i dati puri dal sensore
+    rawData.roll_raw_uart = currentData.roll_raw;
+    rawData.pitch_raw_uart = currentData.pitch_raw;
+    rawData.yaw_raw_uart = currentData.yaw_raw;
+    rawData.timestamp_raw = millis();
+    rawData.valid = true;
+    
+    // Normalizza YAW a [-180, +180] (anche per raw)
+    while (rawData.yaw_raw_uart > 180.0f) rawData.yaw_raw_uart -= 360.0f;
+    while (rawData.yaw_raw_uart < -180.0f) rawData.yaw_raw_uart += 360.0f;
     
     // Normalizza YAW a [-180, +180]
     while (currentData.yaw_raw > 180.0f) currentData.yaw_raw -= 360.0f;
@@ -248,6 +303,46 @@ void HWT906Handler::processAngleFrame(uint8_t* frame) {
     if (currentData.pitch > currentData.pitch_max) currentData.pitch_max = currentData.pitch;
     if (currentData.yaw < currentData.yaw_min) currentData.yaw_min = currentData.yaw;
     if (currentData.yaw > currentData.yaw_max) currentData.yaw_max = currentData.yaw;
+}
+
+// === STEP X2: NUOVA FUNZIONE PROCESSAMENTO QUATERNIONI ===
+void HWT906Handler::processQuaternionFrame(uint8_t* frame) {
+    // Parse quaternioni raw (Witmotion protocol: w,x,y,z)
+    int16_t q0_raw = (int16_t)(frame[2] | (frame[3] << 8));  // w
+    int16_t q1_raw = (int16_t)(frame[4] | (frame[5] << 8));  // x
+    int16_t q2_raw = (int16_t)(frame[6] | (frame[7] << 8));  // y
+    int16_t q3_raw = (int16_t)(frame[8] | (frame[9] << 8));  // z
+    
+    // Conversione a float normalizzato (-1.0 to +1.0)
+    currentData.qw_raw = q0_raw / 32768.0f;
+    currentData.qx_raw = q1_raw / 32768.0f;
+    currentData.qy_raw = q2_raw / 32768.0f;
+    currentData.qz_raw = q3_raw / 32768.0f;
+    
+    // Normalizzazione quaternione per sicurezza
+    normalizeQuaternion(currentData.qw_raw, currentData.qx_raw, currentData.qy_raw, currentData.qz_raw);
+    
+    // Applica filtri ai quaternioni
+    applyQuaternionFilters();
+    
+    // Converti a Eulero (sia raw che filtered)
+    convertQuaternionToEuler();
+    convertQuaternionToEulerFiltered();
+    
+    // Detect gimbal lock
+    detectGimbalLock();
+    
+    // Update status
+    currentData.last_quaternion_time = millis();
+    currentData.quaternion_mode_active = true;
+    currentData.quaternion_available = true;
+    
+    // Debug quaternioni (ridotto)
+    if (debug_counter % (DEBUG_INTERVAL * 5) == 0) {
+        Serial.printf("Q: w=%.3f x=%.3f y=%.3f z=%.3f -> P_Q=%.1f Y_Q=%.1f\n",
+                     currentData.qw_raw, currentData.qx_raw, currentData.qy_raw, currentData.qz_raw,
+                     currentData.pitch_Q, currentData.yaw_Q);
+    }
 }
 
 void HWT906Handler::processAccelFrame(uint8_t* frame) {
@@ -283,6 +378,124 @@ void HWT906Handler::processMagFrame(uint8_t* frame) {
     currentData.mz = (float)mz_raw;
 }
 
+// === STEP X2: NUOVE FUNZIONI QUATERNIONI ===
+
+void HWT906Handler::normalizeQuaternion(float& qw, float& qx, float& qy, float& qz) {
+    float norm = sqrt(qw*qw + qx*qx + qy*qy + qz*qz);
+    if (norm > 0.001f) {  // Evita divisione per zero
+        qw /= norm;
+        qx /= norm;
+        qy /= norm;
+        qz /= norm;
+    } else {
+        // Quaternione identità se norm troppo piccola
+        qw = 1.0f;
+        qx = qy = qz = 0.0f;
+    }
+}
+
+void HWT906Handler::applyQuaternionFilters() {
+    // Filtro EMA per quaternioni (mantiene normalizzazione)
+    static bool first_run = true;
+    if (first_run) {
+        currentData.qw_filtered = currentData.qw_raw;
+        currentData.qx_filtered = currentData.qx_raw;
+        currentData.qy_filtered = currentData.qy_raw;
+        currentData.qz_filtered = currentData.qz_raw;
+        first_run = false;
+        return;
+    }
+    
+    float alpha = 0.1f;  // Smoothing factor (stesso degli Eulero)
+    
+    // SLERP semplificato per tempo reale (EMA lineare + normalizzazione)
+    currentData.qw_filtered = currentData.qw_filtered * (1-alpha) + currentData.qw_raw * alpha;
+    currentData.qx_filtered = currentData.qx_filtered * (1-alpha) + currentData.qx_raw * alpha;
+    currentData.qy_filtered = currentData.qy_filtered * (1-alpha) + currentData.qy_raw * alpha;
+    currentData.qz_filtered = currentData.qz_filtered * (1-alpha) + currentData.qz_raw * alpha;
+    
+    // Re-normalizzazione dopo filtro (CRITICO per quaternioni)
+    normalizeQuaternion(currentData.qw_filtered, currentData.qx_filtered, currentData.qy_filtered, currentData.qz_filtered);
+}
+
+void HWT906Handler::convertQuaternionToEuler() {
+    // Conversione quaternioni RAW -> Eulero
+    float qw = currentData.qw_raw;
+    float qx = currentData.qx_raw;
+    float qy = currentData.qy_raw;
+    float qz = currentData.qz_raw;
+    
+    // Roll (X-axis rotation)
+    float sinr_cosp = 2 * (qw * qx + qy * qz);
+    float cosr_cosp = 1 - 2 * (qx * qx + qy * qy);
+    currentData.roll_Q = atan2(sinr_cosp, cosr_cosp) * 180.0f / PI;
+    
+    // Pitch (Y-axis rotation) - SAFE VERSION contro gimbal lock
+    float sinp = 2 * (qw * qy - qz * qx);
+    if (abs(sinp) >= 1) {
+        currentData.pitch_Q = copysign(90.0f, sinp);  // ±90° limit
+    } else {
+        currentData.pitch_Q = asin(sinp) * 180.0f / PI;
+    }
+    
+    // Yaw (Z-axis rotation)
+    float siny_cosp = 2 * (qw * qz + qx * qy);
+    float cosy_cosp = 1 - 2 * (qy * qy + qz * qz);
+    currentData.yaw_Q = atan2(siny_cosp, cosy_cosp) * 180.0f / PI;
+    
+    // Normalizza YAW_Q a [-180, +180]
+    while (currentData.yaw_Q > 180.0f) currentData.yaw_Q -= 360.0f;
+    while (currentData.yaw_Q < -180.0f) currentData.yaw_Q += 360.0f;
+}
+
+void HWT906Handler::convertQuaternionToEulerFiltered() {
+    // Conversione quaternioni FILTRATI -> Eulero
+    float qw = currentData.qw_filtered;
+    float qx = currentData.qx_filtered;
+    float qy = currentData.qy_filtered;
+    float qz = currentData.qz_filtered;
+    
+    // Stesso algoritmo ma sui quaternioni filtrati
+    float sinr_cosp = 2 * (qw * qx + qy * qz);
+    float cosr_cosp = 1 - 2 * (qx * qx + qy * qy);
+    currentData.roll_Q_filtered = atan2(sinr_cosp, cosr_cosp) * 180.0f / PI;
+    
+    float sinp = 2 * (qw * qy - qz * qx);
+    if (abs(sinp) >= 1) {
+        currentData.pitch_Q_filtered = copysign(90.0f, sinp);
+    } else {
+        currentData.pitch_Q_filtered = asin(sinp) * 180.0f / PI;
+    }
+    
+    float siny_cosp = 2 * (qw * qz + qx * qy);
+    float cosy_cosp = 1 - 2 * (qy * qy + qz * qz);
+    currentData.yaw_Q_filtered = atan2(siny_cosp, cosy_cosp) * 180.0f / PI;
+    
+    // Normalizza YAW_Q_filtered a [-180, +180]
+    while (currentData.yaw_Q_filtered > 180.0f) currentData.yaw_Q_filtered -= 360.0f;
+    while (currentData.yaw_Q_filtered < -180.0f) currentData.yaw_Q_filtered += 360.0f;
+}
+
+void HWT906Handler::detectGimbalLock() {
+    // Detect gimbal lock quando pitch si avvicina a ±90°
+    bool euler_gimbal = (abs(currentData.pitch_filtered) > 85.0f);
+    bool quaternion_gimbal = (abs(currentData.pitch_Q_filtered) > 85.0f);
+    
+    currentData.gimbal_lock_detected = (euler_gimbal || quaternion_gimbal);
+    
+    // Log quando rileva gimbal lock
+    static bool last_gimbal_state = false;
+    if (currentData.gimbal_lock_detected != last_gimbal_state) {
+        if (currentData.gimbal_lock_detected) {
+            Serial.printf("⚠️ GIMBAL LOCK detected: Pitch=%.1f° Pitch_Q=%.1f°\n", 
+                         currentData.pitch_filtered, currentData.pitch_Q_filtered);
+        } else {
+            Serial.println("✅ GIMBAL LOCK cleared");
+        }
+        last_gimbal_state = currentData.gimbal_lock_detected;
+    }
+}
+
 // === FILTRI MULTI-STADIO (CUORE del WIT9-proto) ===
 
 void HWT906Handler::initAdvancedFilters() {
@@ -301,7 +514,7 @@ void HWT906Handler::initAdvancedFilters() {
         filters.P[i][1][1] = 1.0f;
     }
     
-    Serial.println("✅ Advanced filters initialized");
+    Serial.println("✅ Advanced filters initialized (Enhanced for Dual-Mode)");
 }
 
 void HWT906Handler::applyAdvancedFiltering() {
@@ -310,7 +523,7 @@ void HWT906Handler::applyAdvancedFiltering() {
     updateMovingAverage();
     
     // 2. Filtro complementare per pitch/roll
-    applyComplementaryFilter();
+//    applyComplementaryFilter();
     
     // 3. Kalman per YAW (componente critica)
     applyKalmanFilterYaw();
@@ -318,7 +531,7 @@ void HWT906Handler::applyAdvancedFiltering() {
     // 4. EMA finale per smoothing
     applyEMAFilter();
     
-    // 5. Zone morte adattive per stabilità
+    // 5. Zone morte adattive per stabilità 
     applyStaticThreshold();
 }
 
@@ -407,7 +620,7 @@ void HWT906Handler::applyEMAFilter() {
 }
 
 void HWT906Handler::applyStaticThreshold() {
-    // Zone morte adattive per stabilità
+    // Zone morte adattive per stabilità 
     uint32_t now = millis();
     
     // Pitch
@@ -512,7 +725,7 @@ void HWT906Handler::detectStaticState() {
             filters.ema_alpha = 0.05f; // Più smoothing
             filters.comp_alpha = 0.99f; // Più peso al gyro
             
-            Serial.println("📍 Static state detected - enhanced filtering enabled");
+            Serial.println("🔒 Static state detected - enhanced filtering enabled");
         } else {
             uint32_t static_duration = millis() - currentData.static_start_time;
             Serial.printf("🔄 Dynamic state detected after %lus static\n", static_duration/1000);
@@ -605,7 +818,7 @@ void HWT906Handler::loadCalibration() {
         EEPROM.get(HWT906_EEPROM_BASE + 8, currentData.roll_offset);
         currentData.is_calibrated = true;
         
-        Serial.printf("📏 Calibration loaded: P=%.2f Y=%.2f R=%.2f\n",
+        Serial.printf("📂 Calibration loaded: P=%.2f Y=%.2f R=%.2f\n",
                      currentData.pitch_offset, currentData.yaw_offset, currentData.roll_offset);
     }
 }
@@ -624,10 +837,14 @@ void HWT906Handler::updateStatistics() {
 
 void HWT906Handler::printDebugInfo() {
     if (debug_counter % (DEBUG_INTERVAL * 10) == 0) { // Ogni 500 frame
-        Serial.printf("📊 HWT906: P=%.2f° Y=%.2f° D=%.2f° | Rate=%.1fHz | Err=%lu | %s\n",
+        Serial.printf("📊 HWT906 DUAL: P=%.2f° Y=%.2f° D=%.2f° | P_Q=%.2f° Y_Q=%.2f° | Rate=%.1fHz | GL=%s\n",
                      currentData.pitch_filtered, currentData.yaw_filtered, currentData.roll_filtered,
-                     currentData.update_rate, currentData.error_frames,
-                     currentData.is_static ? "STATIC" : "DYNAMIC");
+                     currentData.pitch_Q_filtered, currentData.yaw_Q_filtered,
+                     currentData.update_rate, currentData.gimbal_lock_detected ? "YES" : "NO");
+        
+        Serial.printf("   Frames: E=%lu Q=%lu Err=%lu | %s\n",
+                     currentData.euler_frames_received, currentData.quaternion_frames_received,
+                     currentData.error_frames, currentData.is_static ? "STATIC" : "DYNAMIC");
     }
 }
 
@@ -694,15 +911,18 @@ void HWT906Handler::resetCalibration() {
 }
 
 void HWT906Handler::printStatus() {
-    Serial.println("\n=== HWT906 STATUS ===");
+    Serial.println("\n=== HWT906 DUAL-MODE STATUS ===");
     Serial.printf("Ready: %s\n", sensors_ready ? "YES" : "NO");
     Serial.printf("Mode: %s\n", precision_configs[current_mode].description);
+    Serial.printf("Dual-Mode: %s\n", currentData.quaternion_mode_active ? "ACTIVE" : "INACTIVE");
+    Serial.printf("Gimbal Lock: %s\n", currentData.gimbal_lock_detected ? "DETECTED" : "OK");
     Serial.printf("Drift Comp: %s\n", drift.enabled ? "ON" : "OFF");
     Serial.printf("Static: %s\n", currentData.is_static ? "YES" : "NO");
     Serial.printf("Calibrated: %s\n", currentData.is_calibrated ? "YES" : "NO");
     Serial.printf("Update Rate: %.1f Hz\n", currentData.update_rate);
-    Serial.printf("Frames: %lu (Errors: %lu)\n", currentData.frame_count, currentData.error_frames);
-    Serial.println("===================\n");
+    Serial.printf("Frames: Euler=%lu Quat=%lu (Errors: %lu)\n", 
+                 currentData.euler_frames_received, currentData.quaternion_frames_received, currentData.error_frames);
+    Serial.println("==============================\n");
 }
 
 void HWT906Handler::enableDebug(bool enable) {
@@ -766,4 +986,66 @@ void calibrateHWT906() {
 
 void zeroHWT906Angles() {
     hwt906.saveCurrentAsZero();
+}
+
+// === STEP X1: API WRAPPER RAW DATA ===
+float getHWT906PitchRaw() {
+    return hwt906.getPitchRawUART();
+}
+
+float getHWT906YawRaw() {
+    return hwt906.getYawRawUART();
+}
+
+float getHWT906RollRaw() {
+    return hwt906.getRollRawUART();
+}
+
+HWT906RawData getHWT906RawData() {
+    return hwt906.getRawData();
+}
+
+// === STEP X2: API WRAPPER QUATERNIONS ===
+float getHWT906QuaternionW() {
+    return hwt906.getQuaternionW();
+}
+
+float getHWT906QuaternionX() {
+    return hwt906.getQuaternionX();
+}
+
+float getHWT906QuaternionY() {
+    return hwt906.getQuaternionY();
+}
+
+float getHWT906QuaternionZ() {
+    return hwt906.getQuaternionZ();
+}
+
+float getHWT906PitchQ() {
+    return hwt906.getPitchQ();
+}
+
+float getHWT906YawQ() {
+    return hwt906.getYawQ();
+}
+
+float getHWT906RollQ() {
+    return hwt906.getRollQ();
+}
+
+float getHWT906PitchQFiltered() {
+    return hwt906.getPitchQFiltered();
+}
+
+float getHWT906YawQFiltered() {
+    return hwt906.getYawQFiltered();
+}
+
+float getHWT906RollQFiltered() {
+    return hwt906.getRollQFiltered();
+}
+
+bool isHWT906GimbalLockDetected() {
+    return hwt906.isGimbalLockDetected();
 }

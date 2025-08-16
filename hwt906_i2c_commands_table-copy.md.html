@@ -1,0 +1,1036 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>hwt906_i2c_commands_table-copy.md</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<style>.apeMarkdownDoc {
+    font-family: "OpenSans", "Open Sans", sans-serif;
+    font-size: 14px;
+}
+
+.apeMarkdownDoc {
+    h2 {
+        padding-bottom: 6px;
+    }
+
+    blockquote {
+        border-left: 4px solid rgba(130, 130, 130, 0.2);
+        padding-left: 12px;
+        color: #455A64;
+    }
+
+    code {
+        padding: 8px;
+        background-color: rgba(130, 130, 130, 0.1);
+        border-radius: 8px;
+    }
+
+    pre code {
+        display: block;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+    }
+
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        border: 1px solid rgba(130, 130, 130, 0.35);
+        margin: 12px 0px;
+    }
+
+    table thead:not(:has(:not(:blank))) {
+        display: none;
+    }
+
+    th, td {
+        border: 1px solid rgba(130, 130, 130, 0.35);
+        padding: 4px 8px;
+    }
+
+    th {
+        text-align: center !important;
+    }
+
+    tr:nth-child(even) {
+        background-color: rgba(130, 130, 130, 0.1);
+    }
+
+    img {
+        max-width: 100%;
+        border-radius: 8px;
+    }
+
+    hr {
+        clear: both;
+    }
+}
+
+.adlDark .apeMarkdownDoc {
+    blockquote {
+        color: #B0BEC5;
+    }
+}</style>
+</head>
+<body>
+<div class="apeMarkdownDoc">
+<p>✅ <strong>TABELLA COMPLETA GENERATA!</strong></p>
+<p>Ho creato una tabella comprensiva di <strong>tutti i comandi I2C disponibili</strong> per il HWT906, organizzata per categorie:</p>
+<h2 id="📋-struttura-della-tabella">📋 <strong>STRUTTURA DELLA TABELLA</strong></h2>
+<h3 id="🔧-sezioni-principali"><strong>🔧 Sezioni Principali:</strong></h3>
+<ol>
+<li><strong>Comandi di Sistema</strong> - UNLOCK/SAVE &amp; LOCK</li>
+<li><strong>Configurazione Principale</strong> - RSW, RRATE, BAUD  </li>
+<li><strong>Range Sensori</strong> - Accelerometro, Giroscopio, Magnetometro</li>
+<li><strong>Filtri e Modalità</strong> - Bandwidth, Power Mode, Orientation</li>
+<li><strong>Offset Calibrazione</strong> - Tutti i registri 0x05-0x0D</li>
+<li><strong>Lettura Dati</strong> - Raw data registers 0x34-0x3F</li>
+<li><strong>Registri Avanzati</strong> - Funzioni speciali</li>
+<li><strong>Dati Estesi</strong> - Temperatura, velocità, posizione, quaternioni</li>
+<li><strong>Identificazione</strong> - Numero seriale</li>
+</ol>
+<h3 id="🎯-indicatori-di-utilizzo"><strong>🎯 Indicatori di Utilizzo:</strong></h3>
+<ul>
+<li>✅ <strong>UTILIZZATO</strong> - Configurato e attivo nel progetto</li>
+<li>✅ <strong>CONFIGURATO</strong> - Impostato durante init</li>
+<li>⚠️ <strong>IMPLEMENTAZIONE MANCANTE</strong> - Dovrebbe essere implementato</li>
+<li>❌ <strong>Non utilizzato</strong> - Disponibile ma non usato</li>
+</ul>
+<h3 id="📊-informazioni-complete"><strong>📊 Informazioni Complete:</strong></h3>
+<ul>
+<li><strong>Codice registro</strong> (hex)</li>
+<li><strong>Nome</strong> descrittivo</li>
+<li><strong>Valori possibili</strong> e range</li>
+<li><strong>Formule di conversione</strong> per i dati</li>
+<li><strong>Note specifiche</strong> per il nostro progetto</li>
+</ul>
+<p>La tabella mostra chiaramente che utilizziamo <strong>solo una frazione</strong> dei comandi disponibili, con particolare focus sui <strong>registri di configurazione base</strong> e <strong>ignorando completamente</strong> funzioni avanzate come quaternioni, velocità integrata, temperatura, ecc.</p>
+<p>Questo ti permette di vedere <strong>esattamente quali funzionalità potresti aggiungere</strong> in futuro per espandere le capacità del sistema!</p>
+<div style="page-break-before: always;"></div>
+<h1 id="📋-hwt906---tabella-completa-comandi-i2c">📋 HWT906 - TABELLA COMPLETA COMANDI I2C</h1>
+<h2 id="🔧-comandi-di-sistema-e-controllo">🔧 COMANDI DI SISTEMA E CONTROLLO</h2>
+<table>
+<thead>
+<tr>
+<th><strong>CODICE</strong></th>
+<th><strong>NOME</strong></th>
+<th><strong>DESCRIZIONE</strong></th>
+<th><strong>VALORI</strong></th>
+<th><strong>R/W</strong></th>
+<th><strong>NOTE</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0xFF 0xAA 0x69 0x88 0xB5</code></td>
+<td><strong>UNLOCK</strong></td>
+<td>Sblocca registri per scrittura</td>
+<td>Sequenza fissa</td>
+<td>W</td>
+<td>⚠️ <strong>OBBLIGATORIO</strong> prima di qualsiasi config</td>
+</tr>
+<tr>
+<td><code>0xFF 0xAA 0x00 0x00 0x00</code></td>
+<td><strong>SAVE & LOCK</strong></td>
+<td>Salva configurazione e blocca registri</td>
+<td>Sequenza fissa</td>
+<td>W</td>
+<td>⚠️ <strong>OBBLIGATORIO</strong> dopo config, delay 150ms</td>
+</tr>
+</tbody>
+</table>
+<h2 id="⚙️-registri-di-configurazione-principale">⚙️ REGISTRI DI CONFIGURAZIONE PRINCIPALE</h2>
+<table>
+<thead>
+<tr>
+<th><strong>CODICE</strong></th>
+<th><strong>NOME</strong></th>
+<th><strong>DESCRIZIONE</strong></th>
+<th><strong>VALORI</strong></th>
+<th><strong>R/W</strong></th>
+<th><strong>NOTE</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x02</code></td>
+<td><strong>RSW</strong></td>
+<td>Output Content Control</td>
+<td><code>0x001E</code> (default)</td>
+<td>R/W</td>
+<td>✅ <strong>UTILIZZATO</strong> - Bit mask stream UART</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- Bit 0: TIME (0x50)</td>
+<td><code>0/1</code></td>
+<td></td>
+<td>ON=1, OFF=0</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- Bit 1: ACC (0x51)</td>
+<td><code>0/1</code></td>
+<td></td>
+<td>✅ <strong>Accelerazione</strong></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- Bit 2: GYRO (0x52)</td>
+<td><code>0/1</code></td>
+<td></td>
+<td>✅ <strong>Giroscopio</strong></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- Bit 3: ANGLE (0x53)</td>
+<td><code>0/1</code></td>
+<td></td>
+<td>✅ <strong>Angoli Eulero</strong></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- Bit 4: MAG (0x54)</td>
+<td><code>0/1</code></td>
+<td></td>
+<td>✅ <strong>Magnetometro</strong></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- Bit 5: PORT (0x55)</td>
+<td><code>0/1</code></td>
+<td></td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- Bit 6: PRESS (0x56)</td>
+<td><code>0/1</code></td>
+<td></td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- Bit 7: GPS (0x57)</td>
+<td><code>0/1</code></td>
+<td></td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- Bit 8: VELOCITY (0x58)</td>
+<td><code>0/1</code></td>
+<td></td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- Bit 9: QUATER (0x59)</td>
+<td><code>0/1</code></td>
+<td></td>
+<td>❌ Non utilizzato (Quaternioni)</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- Bit 10: GSA (0x5A)</td>
+<td><code>0/1</code></td>
+<td></td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x03</code></td>
+<td><strong>RRATE</strong></td>
+<td>Sample Rate (Hz)</td>
+<td><code>0x0001-0x00FF</code></td>
+<td>R/W</td>
+<td>✅ <strong>UTILIZZATO</strong> - Nostro: 10Hz (0x000A)</td>
+</tr>
+<tr>
+<td><code>0x04</code></td>
+<td><strong>BAUD</strong></td>
+<td>UART Baud Rate</td>
+<td>Vedi tabella sotto</td>
+<td>R/W</td>
+<td>✅ <strong>UTILIZZATO</strong> - Nostro: 9600 (0x0005)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="valori-baud-rate-registro-0x04">VALORI BAUD RATE (Registro 0x04)</h3>
+<table>
+<thead>
+<tr>
+<th><strong>VALORE</strong></th>
+<th><strong>BAUD RATE</strong></th>
+<th><strong>NOTE</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x0000</code></td>
+<td>4800</td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x0001</code></td>
+<td>9600</td>
+<td>✅ <strong>UTILIZZATO</strong> nel progetto</td>
+</tr>
+<tr>
+<td><code>0x0002</code></td>
+<td>19200</td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x0003</code></td>
+<td>38400</td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x0004</code></td>
+<td>57600</td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x0005</code></td>
+<td>115200</td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x0006</code></td>
+<td>230400</td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x0007</code></td>
+<td>460800</td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x0008</code></td>
+<td>921600</td>
+<td>❌ Era default, cambiato a 9600</td>
+</tr>
+</tbody>
+</table>
+<h2 id="🎛️-registri-range-e-sensibilità-sensori">🎛️ REGISTRI RANGE E SENSIBILITÀ SENSORI</h2>
+<table>
+<thead>
+<tr>
+<th><strong>CODICE</strong></th>
+<th><strong>NOME</strong></th>
+<th><strong>DESCRIZIONE</strong></th>
+<th><strong>VALORI</strong></th>
+<th><strong>R/W</strong></th>
+<th><strong>NOTE</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x21</code></td>
+<td><strong>ACC_RANGE</strong></td>
+<td>Range Accelerometro</td>
+<td></td>
+<td>R/W</td>
+<td>✅ <strong>UTILIZZATO</strong> - Nostro: ±2g</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- ±2g (max risoluzione)</td>
+<td><code>0x0000</code></td>
+<td></td>
+<td>✅ <strong>CONFIGURATO</strong></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- ±4g</td>
+<td><code>0x0001</code></td>
+<td></td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- ±8g</td>
+<td><code>0x0002</code></td>
+<td></td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- ±16g</td>
+<td><code>0x0003</code></td>
+<td></td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x22</code></td>
+<td><strong>GYRO_RANGE</strong></td>
+<td>Range Giroscopio</td>
+<td></td>
+<td>R/W</td>
+<td>✅ <strong>UTILIZZATO</strong> - Nostro: ±250°/s</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- ±250°/s (max precisione)</td>
+<td><code>0x0000</code></td>
+<td></td>
+<td>✅ <strong>CONFIGURATO</strong></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- ±500°/s</td>
+<td><code>0x0001</code></td>
+<td></td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- ±1000°/s</td>
+<td><code>0x0002</code></td>
+<td></td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- ±2000°/s</td>
+<td><code>0x0003</code></td>
+<td></td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x23</code></td>
+<td><strong>MAG_RANGE</strong></td>
+<td>Range Magnetometro</td>
+<td></td>
+<td>R/W</td>
+<td>✅ <strong>UTILIZZATO</strong> - Nostro: ±4 gauss</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- ±4 gauss (max sensibilità)</td>
+<td><code>0x0000</code></td>
+<td></td>
+<td>✅ <strong>CONFIGURATO</strong></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- ±8 gauss</td>
+<td><code>0x0001</code></td>
+<td></td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- ±12 gauss</td>
+<td><code>0x0002</code></td>
+<td></td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- ±16 gauss</td>
+<td><code>0x0003</code></td>
+<td></td>
+<td>❌ Non utilizzato</td>
+</tr>
+</tbody>
+</table>
+<h2 id="🔧-registri-filtri-e-modalità">🔧 REGISTRI FILTRI E MODALITÀ</h2>
+<table>
+<thead>
+<tr>
+<th><strong>CODICE</strong></th>
+<th><strong>NOME</strong></th>
+<th><strong>DESCRIZIONE</strong></th>
+<th><strong>VALORI</strong></th>
+<th><strong>R/W</strong></th>
+<th><strong>NOTE</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x24</code></td>
+<td><strong>BANDWIDTH</strong></td>
+<td>Filtro Passa-Basso</td>
+<td><code>0x0000-0x0007</code></td>
+<td>R/W</td>
+<td>✅ <strong>UTILIZZATO</strong> - Nostro: 0x0001</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- Filtro più aggressivo</td>
+<td><code>0x0000</code></td>
+<td></td>
+<td>❌ Troppo lento per noi</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- Filtro medio</td>
+<td><code>0x0001</code></td>
+<td></td>
+<td>✅ <strong>CONFIGURATO</strong></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- Filtro leggero</td>
+<td><code>0x0002-0x0007</code></td>
+<td></td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x25</code></td>
+<td><strong>PWR_MODE</strong></td>
+<td>Modalità Alimentazione</td>
+<td></td>
+<td>R/W</td>
+<td>✅ <strong>UTILIZZATO</strong> - Nostro: Normal</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- Normal (performance max)</td>
+<td><code>0x0000</code></td>
+<td></td>
+<td>✅ <strong>CONFIGURATO</strong></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- Low Power</td>
+<td><code>0x0001</code></td>
+<td></td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- Suspend</td>
+<td><code>0x0002</code></td>
+<td></td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x26</code></td>
+<td><strong>ORIENT_MODE</strong></td>
+<td>Modalità Orientamento</td>
+<td></td>
+<td>R/W</td>
+<td>✅ <strong>UTILIZZATO</strong> - Nostro: 9-axis</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- 6-axis (solo acc+gyro)</td>
+<td><code>0x0000</code></td>
+<td></td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>- 9-axis (con magnetometro)</td>
+<td><code>0x0001</code></td>
+<td></td>
+<td>✅ <strong>CONFIGURATO</strong></td>
+</tr>
+</tbody>
+</table>
+<h2 id="📐-registri-offset-calibrazione">📐 REGISTRI OFFSET CALIBRAZIONE</h2>
+<table>
+<thead>
+<tr>
+<th><strong>CODICE</strong></th>
+<th><strong>NOME</strong></th>
+<th><strong>DESCRIZIONE</strong></th>
+<th><strong>RANGE</strong></th>
+<th><strong>R/W</strong></th>
+<th><strong>NOTE</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x05</code></td>
+<td><strong>AXOFFSET</strong></td>
+<td>Offset Accelerometro X</td>
+<td><code>±32768</code></td>
+<td>R/W</td>
+<td>⚠️ <strong>IMPLEMENTAZIONE MANCANTE</strong></td>
+</tr>
+<tr>
+<td><code>0x06</code></td>
+<td><strong>AYOFFSET</strong></td>
+<td>Offset Accelerometro Y</td>
+<td><code>±32768</code></td>
+<td>R/W</td>
+<td>⚠️ <strong>IMPLEMENTAZIONE MANCANTE</strong></td>
+</tr>
+<tr>
+<td><code>0x07</code></td>
+<td><strong>AZOFFSET</strong></td>
+<td>Offset Accelerometro Z</td>
+<td><code>±32768</code></td>
+<td>R/W</td>
+<td>⚠️ <strong>IMPLEMENTAZIONE MANCANTE</strong></td>
+</tr>
+<tr>
+<td><code>0x08</code></td>
+<td><strong>GXOFFSET</strong></td>
+<td>Offset Giroscopio X</td>
+<td><code>±32768</code></td>
+<td>R/W</td>
+<td>✅ <strong>UTILIZZATO</strong> software</td>
+</tr>
+<tr>
+<td><code>0x09</code></td>
+<td><strong>GYOFFSET</strong></td>
+<td>Offset Giroscopio Y</td>
+<td><code>±32768</code></td>
+<td>R/W</td>
+<td>✅ <strong>UTILIZZATO</strong> software</td>
+</tr>
+<tr>
+<td><code>0x0A</code></td>
+<td><strong>GZOFFSET</strong></td>
+<td>Offset Giroscopio Z</td>
+<td><code>±32768</code></td>
+<td>R/W</td>
+<td>✅ <strong>UTILIZZATO</strong> software</td>
+</tr>
+<tr>
+<td><code>0x0B</code></td>
+<td><strong>HXOFFSET</strong></td>
+<td>Offset Magnetometro X</td>
+<td><code>±32768</code></td>
+<td>R/W</td>
+<td>⚠️ <strong>IMPLEMENTAZIONE MANCANTE</strong></td>
+</tr>
+<tr>
+<td><code>0x0C</code></td>
+<td><strong>HYOFFSET</strong></td>
+<td>Offset Magnetometro Y</td>
+<td><code>±32768</code></td>
+<td>R/W</td>
+<td>⚠️ <strong>IMPLEMENTAZIONE MANCANTE</strong></td>
+</tr>
+<tr>
+<td><code>0x0D</code></td>
+<td><strong>HZOFFSET</strong></td>
+<td>Offset Magnetometro Z</td>
+<td><code>±32768</code></td>
+<td>R/W</td>
+<td>⚠️ <strong>IMPLEMENTAZIONE MANCANTE</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Unità Offset</strong>: Acc = /10000 g, Gyro = /10000 °/s, Mag = raw units</p>
+<h2 id="📊-registri-di-lettura-dati-read-only">📊 REGISTRI DI LETTURA DATI (Read-Only)</h2>
+<table>
+<thead>
+<tr>
+<th><strong>CODICE</strong></th>
+<th><strong>NOME</strong></th>
+<th><strong>DESCRIZIONE</strong></th>
+<th><strong>FORMULA</strong></th>
+<th><strong>R/W</strong></th>
+<th><strong>NOTE</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x34</code></td>
+<td><strong>AX</strong></td>
+<td>Accelerazione X</td>
+<td><code>AX/32768*16g</code></td>
+<td>R</td>
+<td>✅ <strong>UTILIZZATO</strong> via UART</td>
+</tr>
+<tr>
+<td><code>0x35</code></td>
+<td><strong>AY</strong></td>
+<td>Accelerazione Y</td>
+<td><code>AY/32768*16g</code></td>
+<td>R</td>
+<td>✅ <strong>UTILIZZATO</strong> via UART</td>
+</tr>
+<tr>
+<td><code>0x36</code></td>
+<td><strong>AZ</strong></td>
+<td>Accelerazione Z</td>
+<td><code>AZ/32768*16g</code></td>
+<td>R</td>
+<td>✅ <strong>UTILIZZATO</strong> via UART</td>
+</tr>
+<tr>
+<td><code>0x37</code></td>
+<td><strong>GX</strong></td>
+<td>Velocità angolare X</td>
+<td><code>GX/32768*250°/s</code></td>
+<td>R</td>
+<td>✅ <strong>UTILIZZATO</strong> via UART</td>
+</tr>
+<tr>
+<td><code>0x38</code></td>
+<td><strong>GY</strong></td>
+<td>Velocità angolare Y</td>
+<td><code>GY/32768*250°/s</code></td>
+<td>R</td>
+<td>✅ <strong>UTILIZZATO</strong> via UART</td>
+</tr>
+<tr>
+<td><code>0x39</code></td>
+<td><strong>GZ</strong></td>
+<td>Velocità angolare Z</td>
+<td><code>GZ/32768*250°/s</code></td>
+<td>R</td>
+<td>✅ <strong>UTILIZZATO</strong> via UART</td>
+</tr>
+<tr>
+<td><code>0x3A</code></td>
+<td><strong>HX</strong></td>
+<td>Campo magnetico X</td>
+<td>Raw value</td>
+<td>R</td>
+<td>✅ <strong>UTILIZZATO</strong> via UART</td>
+</tr>
+<tr>
+<td><code>0x3B</code></td>
+<td><strong>HY</strong></td>
+<td>Campo magnetico Y</td>
+<td>Raw value</td>
+<td>R</td>
+<td>✅ <strong>UTILIZZATO</strong> via UART</td>
+</tr>
+<tr>
+<td><code>0x3C</code></td>
+<td><strong>HZ</strong></td>
+<td>Campo magnetico Z</td>
+<td>Raw value</td>
+<td>R</td>
+<td>✅ <strong>UTILIZZATO</strong> via UART</td>
+</tr>
+<tr>
+<td><code>0x3D</code></td>
+<td><strong>Roll</strong></td>
+<td>Angolo Roll</td>
+<td><code>Roll/32768*180°</code></td>
+<td>R</td>
+<td>✅ <strong>UTILIZZATO</strong> via UART</td>
+</tr>
+<tr>
+<td><code>0x3E</code></td>
+<td><strong>Pitch</strong></td>
+<td>Angolo Pitch</td>
+<td><code>Pitch/32768*180°</code></td>
+<td>R</td>
+<td>✅ <strong>UTILIZZATO</strong> via UART</td>
+</tr>
+<tr>
+<td><code>0x3F</code></td>
+<td><strong>Yaw</strong></td>
+<td>Angolo Yaw</td>
+<td><code>Yaw/32768*180°</code></td>
+<td>R</td>
+<td>✅ <strong>UTILIZZATO</strong> via UART</td>
+</tr>
+</tbody>
+</table>
+<h2 id="🔄-registri-avanzati">🔄 REGISTRI AVANZATI</h2>
+<table>
+<thead>
+<tr>
+<th><strong>CODICE</strong></th>
+<th><strong>NOME</strong></th>
+<th><strong>DESCRIZIONE</strong></th>
+<th><strong>VALORI</strong></th>
+<th><strong>R/W</strong></th>
+<th><strong>NOTE</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x27</code></td>
+<td><strong>READADDR</strong></td>
+<td>Lettura registro specifico</td>
+<td><code>0x34-0x3F</code></td>
+<td>R/W</td>
+<td>❌ Non utilizzato - usiamo UART stream</td>
+</tr>
+<tr>
+<td><code>0x50</code></td>
+<td><strong>I2C_ADDR</strong></td>
+<td>Cambio indirizzo I2C</td>
+<td><code>0x50-0x57</code></td>
+<td>R/W</td>
+<td>❌ Non utilizzato - fisso a 0x50</td>
+</tr>
+</tbody>
+</table>
+<h2 id="📡-registri-dati-estesi-non-utilizzati-nel-progetto">📡 REGISTRI DATI ESTESI (Non utilizzati nel progetto)</h2>
+<table>
+<thead>
+<tr>
+<th><strong>CODICE</strong></th>
+<th><strong>NOME</strong></th>
+<th><strong>DESCRIZIONE</strong></th>
+<th><strong>FORMULA</strong></th>
+<th><strong>R/W</strong></th>
+<th><strong>NOTE</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x40</code></td>
+<td><strong>TEMP</strong></td>
+<td>Temperatura</td>
+<td><code>TEMP/100 °C</code></td>
+<td>R</td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x45</code></td>
+<td><strong>LAX</strong></td>
+<td>Accelerazione lineare X</td>
+<td><code>LAX/32768*16g</code></td>
+<td>R</td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x46</code></td>
+<td><strong>LAY</strong></td>
+<td>Accelerazione lineare Y</td>
+<td><code>LAY/32768*16g</code></td>
+<td>R</td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x47</code></td>
+<td><strong>LAZ</strong></td>
+<td>Accelerazione lineare Z</td>
+<td><code>LAZ/32768*16g</code></td>
+<td>R</td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x48</code></td>
+<td><strong>VX</strong></td>
+<td>Velocità X</td>
+<td><code>VX/32768*16 m/s</code></td>
+<td>R</td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x49</code></td>
+<td><strong>VY</strong></td>
+<td>Velocità Y</td>
+<td><code>VY/32768*16 m/s</code></td>
+<td>R</td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x4A</code></td>
+<td><strong>VZ</strong></td>
+<td>Velocità Z</td>
+<td><code>VZ/32768*16 m/s</code></td>
+<td>R</td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x4B</code></td>
+<td><strong>PX</strong></td>
+<td>Posizione X</td>
+<td><code>PX/32768*16 m</code></td>
+<td>R</td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x4C</code></td>
+<td><strong>PY</strong></td>
+<td>Posizione Y</td>
+<td><code>PY/32768*16 m</code></td>
+<td>R</td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x4D</code></td>
+<td><strong>PZ</strong></td>
+<td>Posizione Z</td>
+<td><code>PZ/32768*16 m</code></td>
+<td>R</td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x51</code></td>
+<td><strong>Q0</strong></td>
+<td>Quaternione W</td>
+<td><code>Q0/32768</code></td>
+<td>R</td>
+<td>❌ Non utilizzato - usiamo Eulero</td>
+</tr>
+<tr>
+<td><code>0x52</code></td>
+<td><strong>Q1</strong></td>
+<td>Quaternione X</td>
+<td><code>Q1/32768</code></td>
+<td>R</td>
+<td>❌ Non utilizzato - usiamo Eulero</td>
+</tr>
+<tr>
+<td><code>0x53</code></td>
+<td><strong>Q2</strong></td>
+<td>Quaternione Y</td>
+<td><code>Q2/32768</code></td>
+<td>R</td>
+<td>❌ Non utilizzato - usiamo Eulero</td>
+</tr>
+<tr>
+<td><code>0x54</code></td>
+<td><strong>Q3</strong></td>
+<td>Quaternione Z</td>
+<td><code>Q3/32768</code></td>
+<td>R</td>
+<td>❌ Non utilizzato - usiamo Eulero</td>
+</tr>
+</tbody>
+</table>
+<h2 id="🆔-registri-identificazione">🆔 REGISTRI IDENTIFICAZIONE</h2>
+<table>
+<thead>
+<tr>
+<th><strong>CODICE</strong></th>
+<th><strong>NOME</strong></th>
+<th><strong>DESCRIZIONE</strong></th>
+<th><strong>VALORI</strong></th>
+<th><strong>R/W</strong></th>
+<th><strong>NOTE</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x7F</code></td>
+<td><strong>NUMBERID1</strong></td>
+<td>Numero seriale parte 1</td>
+<td>Device specific</td>
+<td>R</td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x80</code></td>
+<td><strong>NUMBERID2</strong></td>
+<td>Numero seriale parte 2</td>
+<td>Device specific</td>
+<td>R</td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x81</code></td>
+<td><strong>NUMBERID3</strong></td>
+<td>Numero seriale parte 3</td>
+<td>Device specific</td>
+<td>R</td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x82</code></td>
+<td><strong>NUMBERID4</strong></td>
+<td>Numero seriale parte 4</td>
+<td>Device specific</td>
+<td>R</td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x83</code></td>
+<td><strong>NUMBERID5</strong></td>
+<td>Numero seriale parte 5</td>
+<td>Device specific</td>
+<td>R</td>
+<td>❌ Non utilizzato</td>
+</tr>
+<tr>
+<td><code>0x84</code></td>
+<td><strong>NUMBERID6</strong></td>
+<td>Numero seriale parte 6</td>
+<td>Device specific</td>
+<td>R</td>
+<td>❌ Non utilizzato</td>
+</tr>
+</tbody>
+</table>
+<h2 id="⚙️-sequenza-inizializzazione-utilizzata">⚙️ SEQUENZA INIZIALIZZAZIONE UTILIZZATA</h2>
+<pre><code class="cpp language-cpp">// 1. UNLOCK per scrittura registri
+I2C_Write(0x50, 0xFF, [0xAA, 0x69, 0x88, 0xB5])
+delay(150);
+
+// 2. Configurazione Static Optimized
+I2C_Write(0x50, 0x02, [0x1E, 0x00]);  // RSW: TIME+ACC+GYRO+ANGLE+MAG
+delay(150);
+I2C_Write(0x50, 0x03, [0x0A, 0x00]);  // RRATE: 10Hz
+delay(150);
+I2C_Write(0x50, 0x04, [0x01, 0x00]);  // BAUD: 9600
+delay(150);
+I2C_Write(0x50, 0x21, [0x00, 0x00]);  // ACC_RANGE: ±2g
+delay(150);
+I2C_Write(0x50, 0x22, [0x00, 0x00]);  // GYRO_RANGE: ±250°/s
+delay(150);
+I2C_Write(0x50, 0x23, [0x00, 0x00]);  // MAG_RANGE: ±4 gauss
+delay(150);
+I2C_Write(0x50, 0x24, [0x01, 0x00]);  // BANDWIDTH: Medium filter
+delay(150);
+I2C_Write(0x50, 0x25, [0x00, 0x00]);  // PWR_MODE: Normal
+delay(150);
+I2C_Write(0x50, 0x26, [0x01, 0x00]);  // ORIENT_MODE: 9-axis
+delay(150);
+
+// 3. SAVE &amp; LOCK
+I2C_Write(0x50, 0xFF, [0xAA, 0x00, 0x00, 0x00]);
+delay(150);
+</code></pre>
+<h2 id="⚠️-note-importanti">⚠️ NOTE IMPORTANTI</h2>
+<ul>
+<li><strong>Formato dati</strong>: Tutti i valori sono 16-bit <strong>little-endian</strong> (Low byte first)</li>
+<li><strong>Delay obbligatorio</strong>: 150ms tra ogni comando I2C</li>
+<li><strong>UNLOCK/LOCK</strong>: Sempre necessari per modifiche permanenti</li>
+<li><strong>Lettura dati</strong>: Avviene solo tramite <strong>UART stream</strong>, non via I2C</li>
+<li><strong>Indirizzo I2C</strong>: Fisso a <strong>0x50</strong> nel nostro progetto</li>
+<li><strong>Range configurati</strong>: Massima risoluzione (±2g, ±250°/s, ±4gauss)</li>
+</ul>
+<h2 id="🎯-registri-da-implementare">🎯 REGISTRI DA IMPLEMENTARE</h2>
+<h3 id="priority-1-calibrazione-hardware">Priority 1: Calibrazione Hardware</h3>
+<ul>
+<li><strong>0x05-0x0D</strong>: Offset registers per calibrazione persistente hardware</li>
+<li>Attualmente: Calibrazione solo software (persa al reboot)</li>
+</ul>
+<h3 id="priority-2-estensioni-future">Priority 2: Estensioni Future</h3>
+<ul>
+<li><strong>0x40</strong>: Temperatura per compensazione termica</li>
+<li><strong>0x51-0x54</strong>: Quaternioni per applicazioni 3D avanzate</li>
+<li><strong>0x27</strong>: Lettura diretta via I2C per debugging</li>
+</ul>
+</div>
+</body>
+</html>

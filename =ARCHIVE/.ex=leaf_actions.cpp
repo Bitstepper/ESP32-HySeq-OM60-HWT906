@@ -138,90 +138,57 @@ namespace LeafActions {
         }
     }
     
-    // === STEP X2: NUOVA FUNZIONE LIVE DATA DUAL-MODE ===
     void showLiveData() {
-        Serial.println("📊 Showing DUAL-MODE live data (Euler + Quaternions)...");
+        Serial.println("📊 Showing live data with RAW values...");
         actionRunning = true;
         stopRequested = false;
         
         // Setup display
         gfx->fillScreen(RGB565_BLUE);
         
-        // Header con indicatore stato
+        // Header
         gfx->setTextColor(YELLOW);
-        gfx->setTextSize(2);
-        gfx->setCursor(20, 20);
+        gfx->setTextSize(3);
+        gfx->setCursor(50, 20);
         gfx->println("LIVE DATA");
         
-        // Status indicator (top-right) - sarà aggiornato dinamicamente
-        gfx->fillRect(200, 20, 40, 20, GREEN);
-        gfx->setCursor(205, 25);
-        gfx->setTextSize(1);
-        gfx->setTextColor(WHITE);
-        gfx->println("DUAL");
-        
-        // === LAYOUT DUAL-MODE ESTESO ===
+        // === LAYOUT EXPANDED PER RAW VALUES ===
+        // Labels statici (sinistra)
         gfx->setTextSize(2);
         gfx->setTextColor(WHITE);
-        gfx->setCursor(10, 60);
+        gfx->setCursor(10, 70);
         gfx->println("Distance:");
-        
-        // Due colonne per confronto
-        gfx->setTextSize(1);
-        gfx->setTextColor(WHITE);
-        gfx->setCursor(10, 90);
-        gfx->println("EULER (from IMU):");
-        gfx->setCursor(130, 90);
-        gfx->println("EULER (from Q):");
-        
-        // Labels statici pitch
         gfx->setCursor(10, 110);
         gfx->println("Pitch:");
-        gfx->setCursor(10, 125);
+        gfx->setCursor(10, 130);
+        gfx->setTextSize(1);
         gfx->setTextColor(LIGHTGREY);
-        gfx->println("PitchX:");
-        gfx->setTextColor(WHITE);
-        gfx->setCursor(130, 110);
-        gfx->println("Pitch_Q:");
-        gfx->setCursor(130, 125);
-        gfx->setTextColor(LIGHTGREY);
-        gfx->println("Pitch_QF:");
+        gfx->println("PitchX:");    // ← NUOVO RAW
         
-        // Labels statici yaw
+        gfx->setTextSize(2);
         gfx->setTextColor(WHITE);
-        gfx->setCursor(10, 150);
+        gfx->setCursor(10, 160);
         gfx->println("Yaw:");
-        gfx->setCursor(10, 165);
+        gfx->setCursor(10, 180);
+        gfx->setTextSize(1);
         gfx->setTextColor(LIGHTGREY);
-        gfx->println("YawX:");
-        gfx->setTextColor(WHITE);
-        gfx->setCursor(130, 150);
-        gfx->println("Yaw_Q:");
-        gfx->setCursor(130, 165);
-        gfx->setTextColor(LIGHTGREY);
-        gfx->println("Yaw_QF:");
+        gfx->println("YawX:");      // ← NUOVO RAW
         
-        // Labels statici roll
+        gfx->setTextSize(2);
         gfx->setTextColor(WHITE);
-        gfx->setCursor(10, 190);
+        gfx->setCursor(10, 210);
         gfx->println("Roll:");
-        gfx->setCursor(10, 205);
-        gfx->setTextColor(LIGHTGREY);
-        gfx->println("RollX:");
-        gfx->setTextColor(WHITE);
-        gfx->setCursor(130, 190);
-        gfx->println("Roll_Q:");
-        gfx->setCursor(130, 205);
-        gfx->setTextColor(LIGHTGREY);
-        gfx->println("Roll_QF:");
-        
-        // Quaternioni raw
-        gfx->setTextColor(YELLOW);
         gfx->setCursor(10, 230);
-        gfx->println("QUATERNIONS (raw):");
+        gfx->setTextSize(1);
+        gfx->setTextColor(LIGHTGREY);
+        gfx->println("RollX:");     // ← NUOVO RAW
         
         // BACK button
-        const int BACK_X = 80, BACK_Y = 270, BACK_W = 80, BACK_H = 35;
+        const int BACK_X = 20;
+        const int BACK_Y = 270;
+        const int BACK_W = 80;
+        const int BACK_H = 35;
+        
         gfx->fillRect(BACK_X, BACK_Y, BACK_W, BACK_H, ORANGE);
         gfx->drawRect(BACK_X, BACK_Y, BACK_W, BACK_H, WHITE);
         gfx->setCursor(BACK_X + 15, BACK_Y + 10);
@@ -229,111 +196,75 @@ namespace LeafActions {
         gfx->setTextColor(WHITE);
         gfx->println("BACK");
         
-        // === MAIN LOOP DUAL-MODE ===
+        // === MAIN LOOP CON VALORI RAW ===
         while (true) {
+            // Update sensori
             updateHWT906();
+            // updateOM60(); // quando implementato
             
+            // === UPDATE DATI ===
             static uint32_t lastUpdate = 0;
             if (millis() - lastUpdate > 100) {  // 10Hz
                 
-                // Distance
+                // Leggi valori filtered (esistenti)
                 float distance = 850.0f; // getFilteredOM60Distance() quando disponibile
-                gfx->fillRect(140, 60, 100, 20, RGB565_BLUE);
-                gfx->setCursor(140, 60);
+                float pitch = getHWT906Pitch();
+                float yaw = getHWT906Yaw();
+                float roll = getHWT906Roll();
+                
+                // === LEGGI VALORI RAW (NUOVI) ===
+                float pitchX = getHWT906PitchRaw();
+                float yawX = getHWT906YawRaw();
+                float rollX = getHWT906RollRaw();
+                
+                // === CLEAR & UPDATE DISTANCE ===
+                gfx->fillRect(140, 70, 100, 25, RGB565_BLUE);
+                gfx->setCursor(140, 70);
                 gfx->setTextSize(2);
                 gfx->setTextColor(YELLOW);
                 gfx->printf("%4.0f mm", distance);
                 
-                // === COLONNA SINISTRA: EULER TRADIZIONALI ===
-                // Pitch filtered
-                gfx->fillRect(60, 110, 60, 12, RGB565_BLUE);
-                gfx->setCursor(60, 110);
+                // === CLEAR & UPDATE PITCH (FILTERED) ===
+                gfx->fillRect(140, 110, 100, 15, RGB565_BLUE);
+                gfx->setCursor(140, 110);
+                gfx->setTextSize(2);
+                gfx->setTextColor(CYAN);
+                gfx->printf("%+6.2f", pitch);
+                
+                // === CLEAR & UPDATE PITCHX (RAW) ===
+                gfx->fillRect(140, 130, 100, 12, RGB565_BLUE);
+                gfx->setCursor(140, 130);
                 gfx->setTextSize(1);
-                gfx->setTextColor(CYAN);
-                gfx->printf("%+6.2f", getHWT906Pitch());
-                
-                // Pitch raw
-                gfx->fillRect(60, 125, 60, 12, RGB565_BLUE);
-                gfx->setCursor(60, 125);
                 gfx->setTextColor(LIGHTGREY);
-                gfx->printf("%+6.2f", getHWT906PitchRaw());
+                gfx->printf("%+6.2f raw", pitchX);  // ← PIÙ DECIMALI PER RAW
                 
-                // Yaw filtered
-                gfx->fillRect(60, 150, 60, 12, RGB565_BLUE);
-                gfx->setCursor(60, 150);
+                // === CLEAR & UPDATE YAW (FILTERED) ===
+                gfx->fillRect(140, 160, 100, 15, RGB565_BLUE);
+                gfx->setCursor(140, 160);
+                gfx->setTextSize(2);
                 gfx->setTextColor(CYAN);
-                gfx->printf("%+6.2f", getHWT906Yaw());
+                gfx->printf("%+6.2f", yaw);
                 
-                // Yaw raw
-                gfx->fillRect(60, 165, 60, 12, RGB565_BLUE);
-                gfx->setCursor(60, 165);
-                gfx->setTextColor(LIGHTGREY);
-                gfx->printf("%+6.2f", getHWT906YawRaw());
-                
-                // Roll filtered
-                gfx->fillRect(60, 190, 60, 12, RGB565_BLUE);
-                gfx->setCursor(60, 190);
-                gfx->setTextColor(CYAN);
-                gfx->printf("%+6.2f", getHWT906Roll());
-                
-                // Roll raw
-                gfx->fillRect(60, 205, 60, 12, RGB565_BLUE);
-                gfx->setCursor(60, 205);
-                gfx->setTextColor(LIGHTGREY);
-                gfx->printf("%+6.2f", getHWT906RollRaw());
-                
-                // === COLONNA DESTRA: EULER DA QUATERNIONI ===
-                // Pitch_Q raw
-                gfx->fillRect(180, 110, 60, 12, RGB565_BLUE);
-                gfx->setCursor(180, 110);
-                gfx->setTextColor(ORANGE);
-                gfx->printf("%+6.2f", getHWT906PitchQ());
-                
-                // Pitch_Q filtered
-                gfx->fillRect(180, 125, 60, 12, RGB565_BLUE);
-                gfx->setCursor(180, 125);
-                gfx->setTextColor(MAGENTA);
-                gfx->printf("%+6.2f", getHWT906PitchQFiltered());
-                
-                // Yaw_Q raw
-                gfx->fillRect(180, 150, 60, 12, RGB565_BLUE);
-                gfx->setCursor(180, 150);
-                gfx->setTextColor(ORANGE);
-                gfx->printf("%+6.2f", getHWT906YawQ());
-                
-                // Yaw_Q filtered
-                gfx->fillRect(180, 165, 60, 12, RGB565_BLUE);
-                gfx->setCursor(180, 165);
-                gfx->setTextColor(MAGENTA);
-                gfx->printf("%+6.2f", getHWT906YawQFiltered());
-                
-                // Roll_Q raw
-                gfx->fillRect(180, 190, 60, 12, RGB565_BLUE);
-                gfx->setCursor(180, 190);
-                gfx->setTextColor(ORANGE);
-                gfx->printf("%+6.2f", getHWT906RollQ());
-                
-                // Roll_Q filtered
-                gfx->fillRect(180, 205, 60, 12, RGB565_BLUE);
-                gfx->setCursor(180, 205);
-                gfx->setTextColor(MAGENTA);
-                gfx->printf("%+6.2f", getHWT906RollQFiltered());
-                
-                // === QUATERNIONI RAW ===
-                gfx->fillRect(10, 245, 220, 12, RGB565_BLUE);
-                gfx->setCursor(10, 245);
-                gfx->setTextColor(YELLOW);
-                gfx->printf("%.2f %.2f %.2f %.2f", 
-                           getHWT906QuaternionW(), getHWT906QuaternionX(), 
-                           getHWT906QuaternionY(), getHWT906QuaternionZ());
-                
-                // Update status indicator
-                bool gimbalLock = isHWT906GimbalLockDetected();
-                gfx->fillRect(200, 20, 40, 20, gimbalLock ? RED : GREEN);
-                gfx->setCursor(205, 25);
+                // === CLEAR & UPDATE YAWX (RAW) ===
+                gfx->fillRect(140, 180, 100, 12, RGB565_BLUE);
+                gfx->setCursor(140, 180);
                 gfx->setTextSize(1);
-                gfx->setTextColor(WHITE);
-                gfx->println(gimbalLock ? "GL" : "DUAL");
+                gfx->setTextColor(LIGHTGREY);
+                gfx->printf("%+6.2f raw", yawX);   // ← PIÙ DECIMALI PER RAW
+                
+                // === CLEAR & UPDATE ROLL (FILTERED) ===
+                gfx->fillRect(140, 210, 100, 15, RGB565_BLUE);
+                gfx->setCursor(140, 210);
+                gfx->setTextSize(2);
+                gfx->setTextColor(CYAN);
+                gfx->printf("%+6.2f", roll);
+                
+                // === CLEAR & UPDATE ROLLX (RAW) ===
+                gfx->fillRect(140, 230, 100, 12, RGB565_BLUE);
+                gfx->setCursor(140, 230);
+                gfx->setTextSize(1);
+                gfx->setTextColor(LIGHTGREY);
+                gfx->printf("%+6.2f raw", rollX);  // ← PIÙ DECIMALI PER RAW
                 
                 lastUpdate = millis();
             }
@@ -341,6 +272,8 @@ namespace LeafActions {
             // === CHECK TOUCH ===
             if (touch->getTouches() > 0) {
                 auto p = touch->touchPoints[0];
+                
+                // BACK button
                 if (p.x >= BACK_X && p.x <= (BACK_X + BACK_W) && 
                     p.y >= BACK_Y && p.y <= (BACK_Y + BACK_H)) {
                     delay(200);
@@ -464,11 +397,6 @@ namespace LeafActions {
         gfx->setCursor(20, 210);
         gfx->println("Drift Compensation: ENABLED");
         
-        // === STEP X2: AGGIUNGI INFO DUAL-MODE ===
-        gfx->setCursor(20, 190);
-        gfx->setTextColor(GREEN);
-        gfx->println("Dual-Mode: ACTIVE (Euler + Quaternions)");
-        
         // BACK button
         gfx->fillRect(80, 270, 80, 35, ORANGE);
         gfx->drawRect(80, 270, 80, 35, WHITE);
@@ -535,19 +463,7 @@ namespace LeafActions {
             gfx->setCursor(20, 190);
             gfx->printf("Roll:  %+6.2f", data.roll_raw);
             
-            // === STEP X2: AGGIUNGI QUATERNIONI IN CALIBRAZIONE ===
-            gfx->setCursor(20, 210);
-            gfx->setTextColor(YELLOW);
-            gfx->println("Quaternions (Live):");
-            gfx->setCursor(20, 225);
-            gfx->printf("w=%.2f x=%.2f y=%.2f z=%.2f", 
-                       data.qw_raw, data.qx_raw, data.qy_raw, data.qz_raw);
-            
-            gfx->setCursor(20, 240);
-            gfx->setTextColor(data.gimbal_lock_detected ? RED : GREEN);
-            gfx->printf("Gimbal Lock: %s", data.gimbal_lock_detected ? "DETECTED" : "OK");
-            
-            gfx->setCursor(20, 255);
+            gfx->setCursor(20, 220);
             gfx->setTextColor(YELLOW);
             gfx->println("Touch BACK to return");
             
@@ -746,7 +662,7 @@ namespace LeafActions {
         
         gfx->setTextSize(1);
         gfx->setCursor(20, 60);
-        gfx->println("HySeq OM60/HWT906 v2.0 DUAL");    // MODIFICATO: aggiornato nome versione
+        gfx->println("HySeq OM60/HWT906 v2.0");    // MODIFICATO: aggiornato nome versione
         
         gfx->setCursor(20, 80);
         gfx->printf("Free Heap: %lu KB", ESP.getFreeHeap() / 1024);
@@ -769,26 +685,18 @@ namespace LeafActions {
         gfx->setTextColor(isOM60Ready() ? GREEN : RED);      // MODIFICATO: era isRadarReady()
         gfx->println(isOM60Ready() ? "OK" : "ERROR");        // MODIFICATO: era isRadarReady()
         
-        // === STEP X2: AGGIUNGI INFO DUAL-MODE ===
-        gfx->setTextColor(WHITE);
-        gfx->setCursor(20, 190);
-        gfx->print("Dual-Mode: ");
-        gfx->setTextColor(hwt906.getData().quaternion_mode_active ? GREEN : RED);
-        gfx->println(hwt906.getData().quaternion_mode_active ? "ACTIVE" : "INACTIVE");
-        
         // Test sensori in tempo reale
         gfx->setTextColor(WHITE);
-        gfx->setCursor(20, 210);
+        gfx->setCursor(20, 190);
         gfx->println("--- Live Sensor Data ---");
         
         if (isHWT906Ready()) {                       // MODIFICATO: era isIMUReady()
-            gfx->setCursor(20, 230);
-            gfx->printf("P: %.1f  Y: %.1f  GL: %s", getHWT906Pitch(), getHWT906Yaw(),
-                       isHWT906GimbalLockDetected() ? "Y" : "N");  // AGGIUNTO: gimbal lock status
+            gfx->setCursor(20, 210);
+            gfx->printf("Pitch: %.1f  Yaw: %.1f", getHWT906Pitch(), getHWT906Yaw());  // MODIFICATO: era getIMUPitch(), getIMUYaw()
         }
         
         if (isOM60Ready()) {                         // MODIFICATO: era isRadarReady()
-            gfx->setCursor(20, 245);
+            gfx->setCursor(20, 230);
             gfx->printf("Distance: %.0f mm", getFilteredOM60Distance());  // MODIFICATO: era getFilteredRadarDistance()
         }
         
@@ -798,7 +706,7 @@ namespace LeafActions {
         getSensorTaskStats(stats);
         
         gfx->setTextColor(WHITE);
-        gfx->setCursor(20, 260);
+        gfx->setCursor(20, 250);
         gfx->printf("Samples: %d", stats.samples_acquired);
         #endif
         

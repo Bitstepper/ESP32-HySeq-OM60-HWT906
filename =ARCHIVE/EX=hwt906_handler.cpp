@@ -1,631 +1,806 @@
-// hwt906_handler_improved.cpp
-// Versione migliorata con filtri avanzati e compensazione drift da WIT9-proto.ino
+// hwt906_handler.cpp - Implementazione completa basata su WIT9-proto funzionante
+// Include TUTTI i filtri, drift compensation e parsing robusto
+// VERSIONE CORRETTA - Allineata agli errori di compilazione
+// STEP X1: AGGIUNTA SALVATAGGIO VALORI RAW per test ripetibilità
 
 #include "hwt906_handler.h"
-#include <HardwareSerial.h>
-#include <Wire.h>
-#include <Preferences.h>
 
-// === COSTANTI FILTRI AVANZATI ===
-#define MOVING_AVG_SIZE 10
-#define COMPLEMENTARY_ALPHA 0.98f  // Per uso statico
-#define STATIC_THRESHOLD 0.01f     // Soglia freeze
-#define YAW_DRIFT_WINDOW 300       // 5 minuti @ 1Hz
+// === ISTANZA GLOBALE ===
+HWT906Handler hwt906;
 
-// Forward declarations
-bool configureStaticOptimized(PrecisionMode mode);
-void processFrame(uint8_t* frame);
-void applyAdvancedFiltering();
-void compensateDrift();
-void calculateDriftRate();
-bool unlockHWT906();
-bool writeRegister(uint8_t reg, uint16_t value);
+// === PIN DEFINITIONS (mancanti) ===
+#define HWT906_RX_PIN 44
+#define HWT906_TX_PIN 43
 
-// === STRUTTURE DATI (spostate nel header per accesso esterno) ===
+// === IMPLEMENTAZIONE CLASSE PRINCIPALE ===
 
-// === MODALITÀ PRECISIONE (da WIT9-proto) ===
-
-struct PrecisionConfig {
-    uint16_t output_rate;      
-    uint16_t bandwidth;        
-    float ema_alpha;          
-    float static_threshold;   
-    const char* description;
-};
-
-// Configurazioni ottimizzate per misure statiche
-PrecisionConfig precision_configs[] = {
-    {0x0005, 0x0006, 0.95f, 0.005f, "Static Low - Max Filter"},    
-    {0x0006, 0x0005, 0.90f, 0.010f, "Static Med - Balanced"},      
-    {0x0007, 0x0004, 0.85f, 0.015f, "Static High - Responsive"},
-    {0x0009, 0x0003, 0.70f, 0.050f, "Dynamic - Comparison"}        
-};
-
-// === VARIABILI GLOBALI ===
-// Non static per permettere accesso da hwt906_compat.h
-HWT906Data currentData = {};
-AdvancedFilters filters = {};
-DriftCompensation drift_comp = {};
-static PrecisionMode current_precision = PRECISION_STATIC_MEDIUM;
-
-static HardwareSerial* hwt906Serial = nullptr;
-static Preferences prefs;
-
-// === INIZIALIZZAZIONE MIGLIORATA ===
-bool initHWT906() {
-    Serial.println("🔧 Inizializzazione HWT906 con filtri avanzati...");
+bool HWT906Handler::init(HardwareSerial* serial_port) {
+    Serial.println("\n=== HWT906 INIT - WIT9-proto Enhanced ===");
     
-    // Reset strutture
-    memset(&currentData, 0, sizeof(currentData));
-    memset(&filters, 0, sizeof(filters));
-    memset(&drift_comp, 0, sizeof(drift_comp));
+    uart = serial_port;
     
-    // Init Kalman
-    filters.kalman_P = 1.0f;
-    filters.kalman_Q = 0.001f;  // Process noise
-    filters.kalman_R = 0.1f;    // Measurement noise
+    // UART init 
+    uart->begin(HWT906_UART_SPEED, SERIAL_8N1, HWT906_RX_PIN, HWT906_TX_PIN); // 9600, 44, 43
+    uart->setTimeout(10);
     
-    // Abilita drift compensation
-    drift_comp.enabled = true;
+    // === STEP X1: INIT RAW DATA ===
+    rawData.pitch_raw_uart = 0.0f;
+    rawData.yaw_raw_uart = 0.0f;
+    rawData.roll_raw_uart = 0.0f;
+    rawData.timestamp_raw = 0;
+    rawData.valid = false;
     
-    // Carica calibrazione
-    prefs.begin("hwt906", false);
-    currentData.pitch_offset = prefs.getFloat("pitch_off", 0);
-    currentData.yaw_offset = prefs.getFloat("yaw_off", 0);
-    prefs.end();
+    // Init strutture filtri
+    initAdvancedFilters();
+    initDriftCompensation();
     
-    // I2C per configurazione
-    Wire.beginTransmission(HWT906_I2C_ADDR);
-    if (Wire.endTransmission() != 0) {
-        Serial.println("❌ HWT906 non trovato su I2C!");
+    // Carica calibrazione da EEPROM
+    loadCalibration();
+    
+    // I2C init per configurazione
+    Wire.begin();
+    
+    // Configura modalità statica ottimizzata
+    bool config_ok = configureStaticOptimized(current_mode);
+    
+    if (config_ok) {
+        Serial.printf("✅ HWT906 Configured: %s\n", precision_configs[current_mode].description);
+        
+        // Test di comunicazione UART
+        delay(500);
+        uint32_t test_start = millis();
+        int valid_frames = 0;
+        
+        while (millis() - test_start < 2000) {
+            if (parseUARTData()) {
+                valid_frames++;
+                if (valid_frames >= 3) break;
+            }
+            delay(10);
+        }
+        
+        sensors_ready = (valid_frames >= 3);
+        
+        if (sensors_ready) {
+            Serial.printf("✅ HWT906 Ready - %d valid frames\n", valid_frames);
+            currentData.last_frame_time = millis();
+        } else {
+            Serial.println("❌ HWT906 UART Communication Failed");
+        }
+    } else {
+        Serial.println("❌ HWT906 Configuration Failed");
+    }
+    
+    return sensors_ready;
+}
+
+bool HWT906Handler::configureStaticOptimized(HWT906PrecisionMode mode) {
+    Serial.printf("\n=== STATIC CONFIG: %s ===\n", precision_configs[mode].description);
+    
+    // Unlock per scrittura registri
+    if (!unlockHWT906()) {
+        Serial.println("❌ Unlock failed");
         return false;
     }
     
-    // UART per dati
-    if (!hwt906Serial) {
-        hwt906Serial = new HardwareSerial(2);
-    }
-    hwt906Serial->begin(9600, SERIAL_8N1, HWT906_RX_PIN, HWT906_TX_PIN);
-    hwt906Serial->setTimeout(10);
-    
-    // Configurazione ottimizzata
-    if (!configureStaticOptimized(current_precision)) {
+    // CRITICO: Range ridotti per massima risoluzione (dal WIT9-proto)
+    Serial.println("Setting reduced ranges for max resolution...");
+    if (!writeRegister(0x21, 0x0000)) {  // ±2g (8X risoluzione!)
+        Serial.println("❌ Accelerometer range failed");
         return false;
     }
     
-    currentData.sensor_present = true;
-    Serial.println("✅ HWT906 inizializzato con successo!");
-    Serial.printf("📊 Modo: %s\n", precision_configs[current_precision].description);
+    if (!writeRegister(0x20, 0x0000)) {  // ±250°/s 
+        Serial.println("❌ Gyroscope range failed"); 
+        return false;
+    }
     
+    // Output rate ottimizzato
+    if (!writeRegister(0x03, precision_configs[mode].output_rate)) {
+        Serial.println("❌ Output rate failed");
+        return false;
+    }
+    
+    // Algoritmo 9-assi per stabilità 
+    if (!writeRegister(0x24, 0x0000)) {  // 9-axis
+        Serial.println("❌ Algorithm mode failed");
+        return false;
+    }
+    
+    // Filtri ottimizzati
+    writeRegister(0x1F, precision_configs[mode].bandwidth);
+    writeRegister(0x25, precision_configs[mode].kalman_k);
+    writeRegister(0x2A, precision_configs[mode].acc_filter);
+    
+    // Soglie statiche
+    writeRegister(0x61, precision_configs[mode].gyro_threshold);
+    writeRegister(0x63, precision_configs[mode].gyro_cal_time);
+    
+    // Salva configurazione
+    if (!writeRegister(0x00, 0x0000)) {
+        Serial.println("❌ Save config failed");
+        return false;
+    }
+    
+    // Lock
+    lockHWT906();
+    
+    delay(500); // Stabilizzazione
+    current_mode = mode;
+    
+    Serial.println("✅ Static configuration completed");
     return true;
 }
 
-// === CONFIGURAZIONE AVANZATA ===
-bool configureStaticOptimized(PrecisionMode mode) {
-    Serial.printf("⚙️ Configurazione HWT906 modo %d...\n", mode);
-    
-    PrecisionConfig& config = precision_configs[mode];
-    
-    // Unlock registro
-    if (!unlockHWT906()) {
-        return false;
+void HWT906Handler::update() {
+    // Parse dati UART disponibili
+    while (parseUARTData()) {
+        // Processo frame ricevuti
     }
     
-    bool success = true;
+    // Applica pipeline filtri multi-stadio (CHIAVE del WIT9-proto)
+    applyAdvancedFiltering();
     
-    // 1. Reset completo
-    success &= writeRegister(0x01, 0x0001);
-    delay(500);
+    // Compensazione drift
+    compensateDrift();
     
-    // 2. Unlock di nuovo dopo reset
-    if (!unlockHWT906()) {
-        return false;
+    // Rilevamento stato statico
+    detectStaticState();
+    
+    // Aggiorna statistiche
+    updateStatistics();
+    
+    // Debug controllato (ogni 50 frame)
+    if (debug_counter++ % DEBUG_INTERVAL == 0) {
+        printDebugInfo();
     }
-    
-    // 3. Range accelerometro ±2g
-    success &= writeRegister(0x21, 0x0000);
-    delay(100);
-    
-    // 4. Range giroscopio ±2000°/s  
-    success &= writeRegister(0x20, 0x0003);
-    delay(100);
-    
-    // 5. CRITICO: Abilita calcolo angoli automatico
-    success &= writeRegister(0x24, 0x0001);  // Algoritmo ON
-    delay(100);
-    
-    // 6. Modalità output continuo
-    success &= writeRegister(0x23, 0x0001);  // Auto send
-    delay(100);
-    
-    // 7. Output rate
-    success &= writeRegister(0x03, config.output_rate);
-    delay(100);
-    
-    // 8. Bandwidth
-    success &= writeRegister(0x1F, config.bandwidth);
-    delay(100);
-    
-    // 9. SALVA configurazione
-    success &= writeRegister(0x00, 0x0000);
-    delay(500);
-    
-    if (success) {
-        current_precision = mode;
-        Serial.println("✅ Configurazione angoli completata");
-    } else {
-        Serial.println("❌ Errore configurazione");
-    }
-    
-    return success;
 }
 
-
-// === PARSING MIGLIORATO === MUTUATO DA WIT9-Proto.ino (il main allinone)
-void parseHWT906Data() {
-    static uint8_t buffer[64];
-    static uint8_t bufferIndex = 0;
-
+bool HWT906Handler::parseUARTData() {
+    if (!uart || !uart->available()) return false;
     
-    // Debug periodico
-    static uint32_t lastDebug = 0;
-/*    if (millis() - lastDebug > 1000) {
-        Serial.printf("UART: Available=%d, Buffer=%d, Frames=%lu\n", 
-                     hwt906Serial ? hwt906Serial->available() : -1, 
-                     bufferIndex,
-                     currentData.frames_received);
-        lastDebug = millis();
-    }
-*/
-    
-    // Accumula TUTTI i byte disponibili
-    while (hwt906Serial && hwt906Serial->available() && bufferIndex < 64) {
-        buffer[bufferIndex++] = hwt906Serial->read();
-    }
-    
-    // Cerca frame validi quando hai abbastanza dati
-    if (bufferIndex >= 11) {
-        for (int i = 0; i <= bufferIndex - 11; i++) {
-            if (buffer[i] == 0x55) {
-                // Verifica checksum
-                uint8_t checksum = 0;
-                for (int j = 0; j < 10; j++) {
-                    checksum += buffer[i + j];
+    while (uart->available()) {
+        uint8_t byte = uart->read();
+        
+        if (!frame_started) {
+            if (byte == FRAME_HEADER) {
+                frame_started = true;
+                frame_index = 0;
+                frame_buffer[frame_index++] = byte;
+            }
+        } else {
+            frame_buffer[frame_index++] = byte;
+            
+            if (frame_index >= FRAME_SIZE) {
+                // Frame completo - processa
+                if (validateFrame(frame_buffer)) {
+                    if (parseFrame(frame_buffer)) {
+                        currentData.frame_count++;
+                        currentData.last_frame_time = millis();
+                        frame_started = false;
+                        return true; // Frame valido processato
+                    }
+                } else {
+                    currentData.error_frames++;
                 }
                 
-if (checksum == buffer[i + 10]) {
-    // Frame valido trovato!
-//    Serial.printf("Frame OK! Type=0x%02X at pos %d\n", buffer[i+1], i);
-    processFrame(&buffer[i]);
-    currentData.frames_received++;
-    currentData.last_update = millis();  // ← AGGIUNGI QUESTA RIGA
-
-    // Debug aggiuntivo
-//    Serial.printf("✅ HWT906 ora PRESENTE! Last update: %lu\n", currentData.last_update);
-    
-    // Rimuovi frame processato dal buffer
-    int remaining = bufferIndex - (i + 11);
-    if (remaining > 0) {
-        memmove(buffer, &buffer[i + 11], remaining);
-    }
-    bufferIndex = remaining;
-    break;  // Processa un frame alla volta
-}
-
+                frame_started = false;
+                frame_index = 0;
             }
         }
-        
-        // Se il buffer è pieno e non ci sono frame validi, mantieni ultimi 10 byte
-        if (bufferIndex >= 64) {
-            memmove(buffer, &buffer[bufferIndex - 10], 10);
-            bufferIndex = 10;
-        }
     }
     
-    // Update rate
-    static uint32_t lastRateCalc = 0;
-    if (millis() - lastRateCalc > 1000) {
-        currentData.update_rate = currentData.frames_received - 
-                                 currentData.last_frame_count;
-        currentData.last_frame_count = currentData.frames_received;
-        lastRateCalc = millis();
+    return false;
+}
+
+bool HWT906Handler::validateFrame(uint8_t* frame) {
+    // Verifica header
+    if (frame[0] != FRAME_HEADER) return false;
+    
+    // Verifica checksum
+    uint8_t sum = 0;
+    for (int i = 0; i < FRAME_SIZE - 1; i++) {
+        sum += frame[i];
+    }
+    
+    return (sum == frame[FRAME_SIZE - 1]);
+}
+
+bool HWT906Handler::parseFrame(uint8_t* frame) {
+    uint8_t frame_type = frame[1];
+    
+    switch (frame_type) {
+        case FRAME_ANGLE:
+            processAngleFrame(frame);
+            return true;
+        
+        case FRAME_ACCEL:
+            processAccelFrame(frame);
+            return true;
+            
+        case FRAME_GYRO:
+            processGyroFrame(frame);
+            return true;
+            
+        case FRAME_MAG:
+            processMagFrame(frame);
+            return true;
+            
+        default:
+            return false;
     }
 }
 
-// === ELABORAZIONE FRAME ===
-void processFrame(uint8_t* frame) {
-    uint8_t frameType = frame[1];
+void HWT906Handler::processAngleFrame(uint8_t* frame) {
+    // PARSING CORRETTO (dal WIT9-proto) - Low byte FIRST
+    int16_t roll_raw = (int16_t)(frame[2] | (frame[3] << 8));
+    int16_t pitch_raw = (int16_t)(frame[4] | (frame[5] << 8));
+    int16_t yaw_raw = (int16_t)(frame[6] | (frame[7] << 8));
     
-    switch (frameType) {
-        case 0x51: // Accelerazione
-		// CORRETTO (low byte first)
-		currentData.ax = (int16_t)(frame[2] | (frame[3] << 8)) / 32768.0f * 2.0f;
-		currentData.ay = (int16_t)(frame[4] | (frame[5] << 8)) / 32768.0f * 2.0f;
-		currentData.az = (int16_t)(frame[6] | (frame[7] << 8)) / 32768.0f * 2.0f;
-            break;
-            
-        case 0x52: // Giroscopio
-		// CORRETTO (low byte first)  
-		currentData.gx = (int16_t)(frame[2] | (frame[3] << 8)) / 32768.0f * 2000.0f;
-		currentData.gy = (int16_t)(frame[4] | (frame[5] << 8)) / 32768.0f * 2000.0f;
-		currentData.gz = (int16_t)(frame[6] | (frame[7] << 8)) / 32768.0f * 2000.0f;
-            
-            // Calcola magnitudine per rilevamento statico
-            filters.last_gyro_magnitude = sqrt(currentData.gx * currentData.gx + 
-                                             currentData.gy * currentData.gy + 
-                                             currentData.gz * currentData.gz);
-            break;
-            
-
-case 0x53: // Angoli
-    // *** DEBUG FRAME RAW ***
-/*    Serial.printf("📦 FRAME 0x53: [%02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X]\n", 
-                  frame[0], frame[1], frame[2], frame[3], frame[4], 
-                  frame[5], frame[6], frame[7], frame[8], frame[9], frame[10]);
-*/
+    // Conversione in gradi (32768 = 180°)
+    currentData.roll_raw = ((float)roll_raw / 32768.0f) * 180.0f;
+    currentData.pitch_raw = ((float)pitch_raw / 32768.0f) * 180.0f;
+    currentData.yaw_raw = ((float)yaw_raw / 32768.0f) * 180.0f;
     
-    // Debug byte specifici degli angoli
- /*   Serial.printf("🎯 ANGLE BYTES: frame[4]=0x%02X frame[5]=0x%02X (Pitch), frame[6]=0x%02X frame[7]=0x%02X (Yaw)\n",
-                  frame[4], frame[5], frame[6], frame[7]);
- */   
-    // Calcolo con debug dei valori intermedi
-    int16_t pitch_raw_int = (int16_t)(frame[4] | (frame[5] << 8));
-    int16_t yaw_raw_int = (int16_t)(frame[6] | (frame[7] << 8));
+    // === STEP X1: SALVA VALORI RAW PRIMA DI QUALSIASI PROCESSING ===
+    // Questo è il momento CRITICO per catturare i dati puri dal sensore
+    rawData.roll_raw_uart = currentData.roll_raw;
+    rawData.pitch_raw_uart = currentData.pitch_raw;
+    rawData.yaw_raw_uart = currentData.yaw_raw;
+    rawData.timestamp_raw = millis();
+    rawData.valid = true;
     
-//    Serial.printf("🔢 INT16: Pitch=%d, Yaw=%d\n", pitch_raw_int, yaw_raw_int);
+    // Normalizza YAW a [-180, +180] (anche per raw)
+    while (rawData.yaw_raw_uart > 180.0f) rawData.yaw_raw_uart -= 360.0f;
+    while (rawData.yaw_raw_uart < -180.0f) rawData.yaw_raw_uart += 360.0f;
     
-    // CORRETTO (low byte first)
-    float new_pitch = pitch_raw_int / 32768.0f * 180.0f;
-    float new_yaw = yaw_raw_int / 32768.0f * 180.0f;
- 
-/*    
-    // *** DEBUG CALCOLI ***
-    Serial.printf("🔍 RAW: P=%.2f° Y=%.2f° | Offset: P=%.2f° Y=%.2f°\n", 
-                  new_pitch, new_yaw, 
-                  currentData.pitch_offset, currentData.yaw_offset);
-*/
+    // Normalizza YAW a [-180, +180]
+    while (currentData.yaw_raw > 180.0f) currentData.yaw_raw -= 360.0f;
+    while (currentData.yaw_raw < -180.0f) currentData.yaw_raw += 360.0f;
     
     // Applica offset calibrazione
-    new_pitch -= currentData.pitch_offset;
-    new_yaw -= currentData.yaw_offset;
+    currentData.roll = currentData.roll_raw - currentData.roll_offset;
+    currentData.pitch = currentData.pitch_raw - currentData.pitch_offset;
+    currentData.yaw = currentData.yaw_raw - currentData.yaw_offset;
     
-/*
-    Serial.printf("🎯 AFTER OFFSET: P=%.2f° Y=%.2f°\n", new_pitch, new_yaw);            
-*/
-    
-    // Salva valori raw
-    currentData.pitch_raw = new_pitch;
-    currentData.yaw_raw = new_yaw;
- 
-/*    
-    Serial.printf("💾 SAVED: P_raw=%.2f° Y_raw=%.2f°\n", 
-                  currentData.pitch_raw, currentData.yaw_raw);            
-*/
-    
-    // Applica filtri avanzati
-    applyAdvancedFiltering();
+    // Aggiorna range monitoring
+    if (currentData.pitch < currentData.pitch_min) currentData.pitch_min = currentData.pitch;
+    if (currentData.pitch > currentData.pitch_max) currentData.pitch_max = currentData.pitch;
+    if (currentData.yaw < currentData.yaw_min) currentData.yaw_min = currentData.yaw;
+    if (currentData.yaw > currentData.yaw_max) currentData.yaw_max = currentData.yaw;
+}
 
-/*    
-    Serial.printf("✨ FILTERED: P=%.2f° Y=%.2f°\n", 
-                  currentData.pitch, currentData.yaw);            
-*/
+void HWT906Handler::processAccelFrame(uint8_t* frame) {
+    int16_t ax_raw = (int16_t)(frame[2] | (frame[3] << 8));
+    int16_t ay_raw = (int16_t)(frame[4] | (frame[5] << 8));
+    int16_t az_raw = (int16_t)(frame[6] | (frame[7] << 8));
     
+    // Conversione in g (32768 = 16g)
+    currentData.ax = ((float)ax_raw / 32768.0f) * 16.0f;
+    currentData.ay = ((float)ay_raw / 32768.0f) * 16.0f;
+    currentData.az = ((float)az_raw / 32768.0f) * 16.0f;
+}
 
-    currentData.valid = true;
-    currentData.last_update = millis();
-    break;
+void HWT906Handler::processGyroFrame(uint8_t* frame) {
+    int16_t gx_raw = (int16_t)(frame[2] | (frame[3] << 8));
+    int16_t gy_raw = (int16_t)(frame[4] | (frame[5] << 8));
+    int16_t gz_raw = (int16_t)(frame[6] | (frame[7] << 8));
+    
+    // Conversione in °/s (32768 = 2000°/s)
+    currentData.gx = ((float)gx_raw / 32768.0f) * 2000.0f;
+    currentData.gy = ((float)gy_raw / 32768.0f) * 2000.0f;
+    currentData.gz = ((float)gz_raw / 32768.0f) * 2000.0f;
+}
 
+void HWT906Handler::processMagFrame(uint8_t* frame) {
+    int16_t mx_raw = (int16_t)(frame[2] | (frame[3] << 8));
+    int16_t my_raw = (int16_t)(frame[4] | (frame[5] << 8));
+    int16_t mz_raw = (int16_t)(frame[6] | (frame[7] << 8));
+    
+    // Normalizzazione magnetometro
+    currentData.mx = (float)mx_raw;
+    currentData.my = (float)my_raw;
+    currentData.mz = (float)mz_raw;
+}
+
+// === FILTRI MULTI-STADIO (CUORE del WIT9-proto) ===
+
+void HWT906Handler::initAdvancedFilters() {
+    // Reset buffer
+    memset(filters.roll_buffer, 0, sizeof(filters.roll_buffer));
+    memset(filters.pitch_buffer, 0, sizeof(filters.pitch_buffer));
+    memset(filters.yaw_buffer, 0, sizeof(filters.yaw_buffer));
+    filters.buffer_index = 0;
+    filters.buffer_full = false;
+    
+    // Init matrice covarianza Kalman
+    for (int i = 0; i < 3; i++) {
+        filters.P[i][0][0] = 1.0f;
+        filters.P[i][0][1] = 0.0f;
+        filters.P[i][1][0] = 0.0f;
+        filters.P[i][1][1] = 1.0f;
+    }
+    
+    Serial.println("✅ Advanced filters initialized");
+}
+
+void HWT906Handler::applyAdvancedFiltering() {
+    // PIPELINE MULTI-STADIO (strategia WIT9-proto):
+    // 1. Media mobile per ridurre noise
+    updateMovingAverage();
+    
+    // 2. Filtro complementare per pitch/roll
+    applyComplementaryFilter();
+    
+    // 3. Kalman per YAW (componente critica)
+    applyKalmanFilterYaw();
+    
+    // 4. EMA finale per smoothing
+    applyEMAFilter();
+    
+    // 5. Zone morte adattive per stabilità 
+    applyStaticThreshold();
+}
+
+void HWT906Handler::updateMovingAverage() {
+    // Buffer circolare
+    filters.roll_buffer[filters.buffer_index] = currentData.roll;
+    filters.pitch_buffer[filters.buffer_index] = currentData.pitch;
+    filters.yaw_buffer[filters.buffer_index] = currentData.yaw;
+    
+    filters.buffer_index = (filters.buffer_index + 1) % 10;
+    if (filters.buffer_index == 0) filters.buffer_full = true;
+    
+    // Calcola media mobile
+    if (filters.buffer_full) {
+        float roll_sum = 0, pitch_sum = 0, yaw_sum = 0;
+        for (int i = 0; i < 10; i++) {
+            roll_sum += filters.roll_buffer[i];
+            pitch_sum += filters.pitch_buffer[i];
+            yaw_sum += filters.yaw_buffer[i];
+        }
+        
+        currentData.roll = roll_sum / 10.0f;
+        currentData.pitch = pitch_sum / 10.0f;
+        currentData.yaw = yaw_sum / 10.0f;
     }
 }
 
-// === FILTRI AVANZATI MULTI-STADIO ===
-void applyAdvancedFiltering() {
-    // 1. MOVING AVERAGE
-    filters.pitch_buffer[filters.buffer_index] = currentData.pitch_raw;
-    filters.yaw_buffer[filters.buffer_index] = currentData.yaw_raw;
+void HWT906Handler::applyComplementaryFilter() {
+    // Filtro complementare per pitch/roll usando accelerometro
+    float acc_magnitude = sqrt(currentData.ax * currentData.ax + 
+                              currentData.ay * currentData.ay + 
+                              currentData.az * currentData.az);
     
-    filters.buffer_index = (filters.buffer_index + 1) % MOVING_AVG_SIZE;
-    if (filters.buffer_index == 0) {
-        filters.buffer_filled = true;
+    if (acc_magnitude > 0.5f && acc_magnitude < 1.5f) { // Range valido
+        // Calcola angoli da accelerometro
+        float acc_roll = atan2(currentData.ay, currentData.az) * 180.0f / PI;
+        float acc_pitch = atan2(-currentData.ax, sqrt(currentData.ay * currentData.ay + currentData.az * currentData.az)) * 180.0f / PI;
+        
+        // Applica filtro complementare
+        currentData.roll = filters.comp_alpha * currentData.roll + (1.0f - filters.comp_alpha) * acc_roll;
+        currentData.pitch = filters.comp_alpha * currentData.pitch + (1.0f - filters.comp_alpha) * acc_pitch;
     }
+}
+
+void HWT906Handler::applyKalmanFilterYaw() {
+    // Kalman semplificato solo per YAW (componente più critica)
+    int idx = 2; // Yaw index
     
-    // Calcola media
-    float pitch_avg = 0, yaw_avg = 0;
-    int samples = filters.buffer_filled ? MOVING_AVG_SIZE : filters.buffer_index;
-    
-    for (int i = 0; i < samples; i++) {
-        pitch_avg += filters.pitch_buffer[i];
-        yaw_avg += filters.yaw_buffer[i];
-    }
-    pitch_avg /= samples;
-    yaw_avg /= samples;
-    
-    // 2. FILTRO COMPLEMENTARE (solo se giroscopio stabile)
-    if (filters.last_gyro_magnitude < 0.5f) {
-        filters.comp_pitch = COMPLEMENTARY_ALPHA * filters.comp_pitch + 
-                            (1.0f - COMPLEMENTARY_ALPHA) * pitch_avg;
-        filters.comp_yaw = COMPLEMENTARY_ALPHA * filters.comp_yaw + 
-                          (1.0f - COMPLEMENTARY_ALPHA) * yaw_avg;
-    } else {
-        // In movimento, usa direttamente media
-        filters.comp_pitch = pitch_avg;
-        filters.comp_yaw = yaw_avg;
-    }
-    
-    // 3. KALMAN PER YAW (semplificato)
     // Predict
-    filters.kalman_P += filters.kalman_Q;
+    filters.angle[idx] += (currentData.gz - filters.bias[idx]) * 0.01f; // dt = 10ms
+    filters.P[idx][0][0] += 0.01f * (0.01f * filters.P[idx][1][1] - filters.P[idx][0][1] - filters.P[idx][1][0] + filters.Q_angle);
+    filters.P[idx][0][1] -= 0.01f * filters.P[idx][1][1];
+    filters.P[idx][1][0] -= 0.01f * filters.P[idx][1][1];
+    filters.P[idx][1][1] += filters.Q_bias * 0.01f;
     
     // Update
-    float K = filters.kalman_P / (filters.kalman_P + filters.kalman_R);
-    filters.kalman_yaw += K * (filters.comp_yaw - filters.kalman_yaw);
-    filters.kalman_P = (1.0f - K) * filters.kalman_P;
+    float innovation = currentData.yaw - filters.angle[idx];
+    float S = filters.P[idx][0][0] + filters.R_measure;
+    float K[2];
+    K[0] = filters.P[idx][0][0] / S;
+    K[1] = filters.P[idx][1][0] / S;
     
-    // 4. RILEVAMENTO STATO STATICO
-    if (filters.last_gyro_magnitude < 0.1f) {
-        if (!filters.is_static) {
-            filters.static_start_time = millis();
-            filters.is_static = true;
-        }
-    } else {
-        filters.is_static = false;
-    }
+    filters.angle[idx] += K[0] * innovation;
+    filters.bias[idx] += K[1] * innovation;
     
-    // 5. SOGLIA STATICA (freeze sotto threshold)
-    float pitch_change = fabs(filters.comp_pitch - currentData.pitch);
-    float yaw_change = fabs(filters.kalman_yaw - currentData.yaw);
+    float P00_temp = filters.P[idx][0][0];
+    float P01_temp = filters.P[idx][0][1];
     
-    // Se statico da più di 2 secondi, applica soglia più stretta
-    float threshold = STATIC_THRESHOLD;
-    if (filters.is_static && (millis() - filters.static_start_time > 2000)) {
-        threshold = STATIC_THRESHOLD / 2.0f;
-    }
+    filters.P[idx][0][0] -= K[0] * P00_temp;
+    filters.P[idx][0][1] -= K[0] * P01_temp;
+    filters.P[idx][1][0] -= K[1] * P00_temp;
+    filters.P[idx][1][1] -= K[1] * P01_temp;
     
-    // Aggiorna solo se sopra soglia
-    if (pitch_change > threshold) {
-        currentData.pitch = filters.comp_pitch;
-    }
-    
-    if (yaw_change > threshold) {
-        currentData.yaw = filters.kalman_yaw;
-    }
-    
-    // 6. COMPENSAZIONE DRIFT YAW
-    compensateDrift();
+    currentData.yaw = filters.angle[idx];
 }
 
-// === COMPENSAZIONE DRIFT ===
-void compensateDrift() {
-    if (!drift_comp.enabled) return;
+void HWT906Handler::applyEMAFilter() {
+    // EMA finale per smoothing
+    currentData.roll_filtered = filters.ema_alpha * currentData.roll + (1.0f - filters.ema_alpha) * filters.last_roll;
+    currentData.pitch_filtered = filters.ema_alpha * currentData.pitch + (1.0f - filters.ema_alpha) * filters.last_pitch;
+    currentData.yaw_filtered = filters.ema_alpha * currentData.yaw + (1.0f - filters.ema_alpha) * filters.last_yaw;
+    
+    filters.last_roll = currentData.roll_filtered;
+    filters.last_pitch = currentData.pitch_filtered;
+    filters.last_yaw = currentData.yaw_filtered;
+}
+
+void HWT906Handler::applyStaticThreshold() {
+    // Zone morte adattive per stabilità 
+    uint32_t now = millis();
+    
+    // Pitch
+    float pitch_delta = abs(currentData.pitch_filtered - filters.last_pitch);
+    if (pitch_delta < filters.pitch_dead_zone) {
+        currentData.pitch_filtered = filters.last_pitch;
+    } else {
+        filters.last_significant_change = now;
+    }
+    
+    // Yaw con zona morta più ampia
+    float yaw_delta = abs(currentData.yaw_filtered - filters.last_yaw);
+    if (yaw_delta < filters.yaw_dead_zone) {
+        currentData.yaw_filtered = filters.last_yaw;
+    } else {
+        filters.last_significant_change = now;
+    }
+}
+
+// === DRIFT COMPENSATION (funzionalità chiave WIT9-proto) ===
+
+void HWT906Handler::initDriftCompensation() {
+    drift.enabled = true;
+    drift.reference_time = millis();
+    drift.yaw_reference = 0.0f;
+    drift.history_index = 0;
+    drift.history_full = false;
+    
+    memset(drift.yaw_history, 0, sizeof(drift.yaw_history));
+    memset(drift.history_timestamps, 0, sizeof(drift.history_timestamps));
+    
+    Serial.println("✅ Drift compensation initialized");
+}
+
+void HWT906Handler::compensateDrift() {
+    if (!drift.enabled) return;
     
     uint32_t now = millis();
     
-    // Aggiungi campione ogni secondo
-    static uint32_t last_sample = 0;
-    if (now - last_sample > 1000) {
-        drift_comp.yaw_history[drift_comp.history_index] = currentData.yaw;
-        drift_comp.timestamps[drift_comp.history_index] = now;
+    // Aggiorna storia ogni secondo
+    if (now - drift.last_compensation >= 1000) {
+        updateDriftHistory();
         
-        drift_comp.history_index = (drift_comp.history_index + 1) % YAW_DRIFT_WINDOW;
-        if (drift_comp.history_index == 0) {
-            drift_comp.history_filled = true;
-        }
-        
-        last_sample = now;
-        
-        // Calcola drift rate se abbiamo abbastanza dati
-        if (drift_comp.history_filled || drift_comp.history_index > 60) {
+        // Calcola drift rate se abbiamo abbastanza storia
+        if (drift.history_full || drift.history_index > 60) { // Almeno 1 minuto
             calculateDriftRate();
+            
+            // Applica compensazione
+            if (abs(drift.yaw_drift_rate) < drift.MAX_COMP_RATE) {
+                float compensation = drift.yaw_drift_rate * (now - drift.reference_time) / 1000.0f;
+                currentData.yaw_filtered -= compensation;
+            }
         }
-    }
-    
-    // Applica compensazione
-    if (drift_comp.yaw_drift_rate != 0 && filters.is_static) {
-        float dt = (now - drift_comp.last_compensation_time) / 1000.0f;
-        float compensation = drift_comp.yaw_drift_rate * dt;
         
-        // Limita compensazione
-        compensation = constrain(compensation, -0.02f, 0.02f);
-        
-        currentData.yaw -= compensation;
-        drift_comp.yaw_accumulated += compensation;
-        
-        drift_comp.last_compensation_time = now;
+        drift.last_compensation = now;
     }
 }
 
-// === CALCOLO DRIFT RATE ===
-void calculateDriftRate() {
-    int samples = drift_comp.history_filled ? YAW_DRIFT_WINDOW : drift_comp.history_index;
-    if (samples < 30) return;  // Minimo 30 secondi
+void HWT906Handler::updateDriftHistory() {
+    drift.yaw_history[drift.history_index] = currentData.yaw_filtered;
+    drift.history_timestamps[drift.history_index] = millis();
     
-    // Regressione lineare semplice
-    float sum_x = 0, sum_y = 0, sum_xy = 0, sum_xx = 0;
-    float t0 = drift_comp.timestamps[0] / 1000.0f;
+    drift.history_index = (drift.history_index + 1) % 300;
+    if (drift.history_index == 0) drift.history_full = true;
+}
+
+void HWT906Handler::calculateDriftRate() {
+    // Regressione lineare per calcolare drift rate
+    int samples = drift.history_full ? 300 : drift.history_index;
+    if (samples < 30) return;
+    
+    float sum_x = 0, sum_y = 0, sum_xy = 0, sum_x2 = 0;
+    uint32_t base_time = drift.history_timestamps[0];
     
     for (int i = 0; i < samples; i++) {
-        float x = (drift_comp.timestamps[i] / 1000.0f) - t0;
-        float y = drift_comp.yaw_history[i];
+        float x = (drift.history_timestamps[i] - base_time) / 1000.0f; // Secondi
+        float y = drift.yaw_history[i];
         
         sum_x += x;
         sum_y += y;
         sum_xy += x * y;
-        sum_xx += x * x;
+        sum_x2 += x * x;
     }
     
-    float n = samples;
-    float slope = (n * sum_xy - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x);
-    
-    // Aggiorna drift rate (°/s)
-    drift_comp.yaw_drift_rate = slope;
-    
-    // Limita a valori ragionevoli
-    drift_comp.yaw_drift_rate = constrain(drift_comp.yaw_drift_rate, -0.00033f, 0.00033f);
+    float slope = (samples * sum_xy - sum_x * sum_y) / (samples * sum_x2 - sum_x * sum_x);
+    drift.yaw_drift_rate = slope;
 }
 
-// === CALIBRAZIONE MIGLIORATA ===
-void calibrateHWT906() {
-    Serial.println("🎯 Calibrazione HWT906 (20 secondi)...");
+// === RILEVAMENTO STATO STATICO ===
+
+void HWT906Handler::detectStaticState() {
+    bool currently_static = (abs(currentData.gx) < currentData.static_threshold &&
+                           abs(currentData.gy) < currentData.static_threshold &&
+                           abs(currentData.gz) < currentData.static_threshold);
     
-    float pitch_sum = 0, yaw_sum = 0;
-    float gx_sum = 0, gy_sum = 0, gz_sum = 0;
+    if (currently_static != currentData.is_static) {
+        if (currently_static) {
+            currentData.is_static = true;
+            currentData.static_start_time = millis();
+            
+            // Ottimizza filtri per stato statico
+            filters.ema_alpha = 0.05f; // Più smoothing
+            filters.comp_alpha = 0.99f; // Più peso al gyro
+            
+            Serial.println("🔒 Static state detected - enhanced filtering enabled");
+        } else {
+            uint32_t static_duration = millis() - currentData.static_start_time;
+            Serial.printf("🔄 Dynamic state detected after %lus static\n", static_duration/1000);
+            
+            // Ripristina filtri dinamici
+            filters.ema_alpha = 0.1f;
+            filters.comp_alpha = 0.98f;
+            
+            currentData.is_static = false;
+        }
+    }
+}
+
+// === METODI I2C ===
+
+bool HWT906Handler::unlockHWT906() {
+    Wire.beginTransmission(HWT906_I2C_ADDR);
+    Wire.write(0x69);
+    Wire.write(0x88);
+    Wire.write(0xB5);
+    return (Wire.endTransmission() == 0);
+}
+
+bool HWT906Handler::writeRegister(uint8_t reg, uint16_t value) {
+    Wire.beginTransmission(HWT906_I2C_ADDR);
+    Wire.write(reg);
+    Wire.write(value & 0xFF);        // Low byte
+    Wire.write((value >> 8) & 0xFF); // High byte
+    return (Wire.endTransmission() == 0);
+}
+
+bool HWT906Handler::lockHWT906() {
+    delay(10);
+    return true; // Auto-lock dopo salvataggio
+}
+
+// === CALIBRAZIONE ===
+
+void HWT906Handler::startCalibration() {
+    Serial.println("🎯 Starting calibration...");
+    
+    // Reset offset
+    currentData.pitch_offset = 0.0f;
+    currentData.yaw_offset = 0.0f;
+    currentData.roll_offset = 0.0f;
+    
+    // Raccoli dati per 3 secondi
+    float pitch_sum = 0.0f, yaw_sum = 0.0f, roll_sum = 0.0f;
     int samples = 0;
     
-    uint32_t start_time = millis();
-    
-    while (millis() - start_time < 20000) {
-        parseHWT906Data();
-        
-        if (currentData.valid) {
+    uint32_t start = millis();
+    while (millis() - start < 3000) {
+        if (parseUARTData()) {
             pitch_sum += currentData.pitch_raw;
             yaw_sum += currentData.yaw_raw;
-            gx_sum += currentData.gx;
-            gy_sum += currentData.gy;
-            gz_sum += currentData.gz;
+            roll_sum += currentData.roll_raw;
             samples++;
         }
-        
         delay(10);
     }
     
     if (samples > 0) {
-        // Calcola offset
         currentData.pitch_offset = pitch_sum / samples;
         currentData.yaw_offset = yaw_sum / samples;
+        currentData.roll_offset = roll_sum / samples;
         
-        // Calcola bias giroscopio
-        float gx_bias = gx_sum / samples;
-        float gy_bias = gy_sum / samples;
-        float gz_bias = gz_sum / samples;
+        saveCalibration();
+        currentData.is_calibrated = true;
         
-        // Salva calibrazione
-        prefs.begin("hwt906", false);
-        prefs.putFloat("pitch_off", currentData.pitch_offset);
-        prefs.putFloat("yaw_off", currentData.yaw_offset);
-        prefs.end();
-        
-        // Reset filtri
-        memset(&filters, 0, sizeof(filters));
-        filters.kalman_P = 1.0f;
-        filters.kalman_Q = 0.001f;
-        filters.kalman_R = 0.1f;
-        
-        // Reset drift compensation
-        memset(&drift_comp, 0, sizeof(drift_comp));
-        drift_comp.enabled = true;
-        
-        Serial.println("✅ Calibrazione completata!");
-        Serial.printf("📐 Offset: Pitch=%.2f° Yaw=%.2f°\n", 
-                     currentData.pitch_offset, currentData.yaw_offset);
-        Serial.printf("🌀 Bias giroscopio: X=%.3f Y=%.3f Z=%.3f °/s\n",
-                     gx_bias, gy_bias, gz_bias);
+        Serial.printf("✅ Calibration complete: P=%.2f Y=%.2f R=%.2f\n", 
+                     currentData.pitch_offset, currentData.yaw_offset, currentData.roll_offset);
     }
 }
 
-// === FUNZIONI DI ACCESSO ===
-float getHWT906Pitch() {
-    return currentData.pitch;
+void HWT906Handler::saveCalibration() {
+    EEPROM.put(HWT906_EEPROM_BASE, currentData.pitch_offset);
+    EEPROM.put(HWT906_EEPROM_BASE + 4, currentData.yaw_offset);
+    EEPROM.put(HWT906_EEPROM_BASE + 8, currentData.roll_offset);
+    EEPROM.put(HWT906_EEPROM_BASE + 12, true); // Calibrated flag
+    EEPROM.commit();
 }
 
-float getHWT906Yaw() {
-    return currentData.yaw;
-}
-
-bool isHWT906Present() {
-    return currentData.sensor_present && 
-           (millis() - currentData.last_update < 1000);
-}
-
-// === FUNZIONI DI UTILITÀ ===
-void setDriftCompensation(bool enabled) {
-    drift_comp.enabled = enabled;
-    if (enabled) {
-        Serial.println("✅ Compensazione drift abilitata");
-    } else {
-        Serial.println("❌ Compensazione drift disabilitata");
-    }
-}
-
-void setPrecisionMode(PrecisionMode mode) {
-    if (mode != current_precision) {
-        configureStaticOptimized(mode);
-    }
-}
-
-void getStabilityMetrics(float& pitch_sigma, float& yaw_sigma) {
-    // Calcola deviazione standard ultimi 10 campioni
-    if (!filters.buffer_filled && filters.buffer_index < 2) {
-        pitch_sigma = yaw_sigma = 0;
-        return;
-    }
+void HWT906Handler::loadCalibration() {
+    bool calibrated;
+    EEPROM.get(HWT906_EEPROM_BASE + 12, calibrated);
     
-    int samples = filters.buffer_filled ? MOVING_AVG_SIZE : filters.buffer_index;
-    
-    // Media
-    float pitch_mean = 0, yaw_mean = 0;
-    for (int i = 0; i < samples; i++) {
-        pitch_mean += filters.pitch_buffer[i];
-        yaw_mean += filters.yaw_buffer[i];
-    }
-    pitch_mean /= samples;
-    yaw_mean /= samples;
-    
-    // Deviazione standard
-    float pitch_var = 0, yaw_var = 0;
-    for (int i = 0; i < samples; i++) {
-        pitch_var += pow(filters.pitch_buffer[i] - pitch_mean, 2);
-        yaw_var += pow(filters.yaw_buffer[i] - yaw_mean, 2);
-    }
-    
-    pitch_sigma = sqrt(pitch_var / samples);
-    yaw_sigma = sqrt(yaw_var / samples);
-}
-
-// === HELPER FUNCTIONS ===
-bool unlockHWT906() {
-    for (int retry = 0; retry < 3; retry++) {
-        Wire.beginTransmission(HWT906_I2C_ADDR);
-        Wire.write(0xFF);
-        Wire.write(0xAA);
-        Wire.write(0x69);
-        Wire.write(0x88);
-        Wire.write(0xB5);
+    if (calibrated) {
+        EEPROM.get(HWT906_EEPROM_BASE, currentData.pitch_offset);
+        EEPROM.get(HWT906_EEPROM_BASE + 4, currentData.yaw_offset);
+        EEPROM.get(HWT906_EEPROM_BASE + 8, currentData.roll_offset);
+        currentData.is_calibrated = true;
         
-        if (Wire.endTransmission() == 0) {
-            delay(100);
-            return true;
-        }
-        delay(200);
+        Serial.printf("📂 Calibration loaded: P=%.2f Y=%.2f R=%.2f\n",
+                     currentData.pitch_offset, currentData.yaw_offset, currentData.roll_offset);
     }
-    return false;
 }
 
-bool writeRegister(uint8_t reg, uint16_t value) {
-    Wire.beginTransmission(HWT906_I2C_ADDR);
-    Wire.write(0xFF);
-    Wire.write(0xAA);
-    Wire.write(reg);
-    Wire.write(value & 0xFF);
-    Wire.write((value >> 8) & 0xFF);
+// === STATISTICHE E DEBUG ===
+
+void HWT906Handler::updateStatistics() {
+    uint32_t now = millis();
+    static uint32_t last_update = 0;
     
-    return Wire.endTransmission() == 0;
+    if (now - last_update >= 1000) { // Ogni secondo
+        currentData.update_rate = (float)currentData.frame_count / ((now - last_update) / 1000.0f);
+        last_update = now;
+    }
 }
 
-// === FUNZIONI STUB PER COMPATIBILITÀ MAG ===
-// Il HWT906 ha il magnetometro ma la calibrazione è diversa
+void HWT906Handler::printDebugInfo() {
+    if (debug_counter % (DEBUG_INTERVAL * 10) == 0) { // Ogni 500 frame
+        Serial.printf("📊 HWT906: P=%.2f° Y=%.2f° D=%.2f° | Rate=%.1fHz | Err=%lu | %s\n",
+                     currentData.pitch_filtered, currentData.yaw_filtered, currentData.roll_filtered,
+                     currentData.update_rate, currentData.error_frames,
+                     currentData.is_static ? "STATIC" : "DYNAMIC");
+    }
+}
+
+// === IMPLEMENTAZIONI METODI PUBBLICI MANCANTI ===
+
+void HWT906Handler::setPrecisionMode(HWT906PrecisionMode mode) {
+    current_mode = mode;
+    configureStaticOptimized(mode);
+}
+
+void HWT906Handler::setDriftCompensation(bool enable) {
+    drift.enabled = enable;
+    Serial.printf("🔄 Drift compensation: %s\n", enable ? "ENABLED" : "DISABLED");
+}
+
+void HWT906Handler::saveCurrentAsZero() {
+    currentData.pitch_offset = currentData.pitch_raw;
+    currentData.yaw_offset = currentData.yaw_raw;
+    currentData.roll_offset = currentData.roll_raw;
+    
+    saveCalibration();
+    currentData.is_calibrated = true;
+    
+    Serial.printf("✅ Zero saved: P=%.2f° Y=%.2f° R=%.2f°\n", 
+                 currentData.pitch_offset, currentData.yaw_offset, currentData.roll_offset);
+}
+
+void HWT906Handler::setDeadZones(float pitch_zone, float yaw_zone) {
+    filters.pitch_dead_zone = pitch_zone;
+    filters.yaw_dead_zone = yaw_zone;
+    Serial.printf("🎯 Dead zones set: Pitch=%.2f° Yaw=%.2f°\n", pitch_zone, yaw_zone);
+}
+
+void HWT906Handler::getRange(float& pitch_min, float& pitch_max, float& yaw_min, float& yaw_max) {
+    pitch_min = currentData.pitch_min;
+    pitch_max = currentData.pitch_max;
+    yaw_min = currentData.yaw_min;
+    yaw_max = currentData.yaw_max;
+}
+
+void HWT906Handler::resetRange() {
+    currentData.pitch_min = 999.0f;
+    currentData.pitch_max = -999.0f;
+    currentData.yaw_min = 999.0f;
+    currentData.yaw_max = -999.0f;
+    Serial.println("🔄 Range statistics reset");
+}
+
+void HWT906Handler::resetCalibration() {
+    // Reset offset calibrazioni
+    currentData.pitch_offset = 0.0f;
+    currentData.yaw_offset = 0.0f;
+    currentData.roll_offset = 0.0f;
+    currentData.is_calibrated = false;
+    
+    // Cancella da EEPROM
+    EEPROM.put(HWT906_EEPROM_BASE, 0.0f);        // pitch_offset
+    EEPROM.put(HWT906_EEPROM_BASE + 4, 0.0f);    // yaw_offset  
+    EEPROM.put(HWT906_EEPROM_BASE + 8, 0.0f);    // roll_offset
+    EEPROM.put(HWT906_EEPROM_BASE + 12, false);  // calibrated flag
+    EEPROM.commit();
+    
+    Serial.println("🔄 HWT906 calibration reset");
+}
+
+void HWT906Handler::printStatus() {
+    Serial.println("\n=== HWT906 STATUS ===");
+    Serial.printf("Ready: %s\n", sensors_ready ? "YES" : "NO");
+    Serial.printf("Mode: %s\n", precision_configs[current_mode].description);
+    Serial.printf("Drift Comp: %s\n", drift.enabled ? "ON" : "OFF");
+    Serial.printf("Static: %s\n", currentData.is_static ? "YES" : "NO");
+    Serial.printf("Calibrated: %s\n", currentData.is_calibrated ? "YES" : "NO");
+    Serial.printf("Update Rate: %.1f Hz\n", currentData.update_rate);
+    Serial.printf("Frames: %lu (Errors: %lu)\n", currentData.frame_count, currentData.error_frames);
+    Serial.println("===================\n");
+}
+
+void HWT906Handler::enableDebug(bool enable) {
+    // Toggle debug output frequency
+    // Implementation can be expanded later
+    Serial.printf("🔍 Debug mode: %s\n", enable ? "ON" : "OFF");
+}
+
+// === FUNZIONI MAGNETOMETRO STUB (per compatibilità OM60) ===
+
 void startMagCalibration() {
-    Serial.println("⚠️ Calibrazione magnetometro HWT906 non implementata");
-    // TODO: Implementare calibrazione mag specifica per HWT906
+    Serial.println("🧭 Magnetometer calibration not applicable for HWT906");
+    Serial.println("   (HWT906 uses internal magnetometer calibration)");
 }
 
 bool isMagCalibrationInProgress() {
-    return false;  // Per ora sempre false
+    return false; // HWT906 calibration is internal
 }
 
 float getMagCalibrationProgress() {
-    return 0.0f;  // Per ora sempre 0%
+    return 100.0f; // Always "complete" for HWT906
 }
 
 void finishMagCalibration() {
-    // Nulla da fare per ora
+    Serial.println("✅ Magnetometer calibration: N/A for HWT906");
+}
+
+// === API WRAPPER GLOBALI (compatibilità) ===
+
+bool initHWT906() {
+    return hwt906.init();
+}
+
+void updateHWT906() {
+    hwt906.update();
+}
+
+float getHWT906Pitch() {
+    return hwt906.getPitch();
+}
+
+float getHWT906Yaw() {
+    return hwt906.getYaw();
+}
+
+float getHWT906Roll() {
+    return hwt906.getRoll();
+}
+
+bool isHWT906Ready() {
+    return hwt906.isReady();
+}
+
+bool isHWT906Present() {
+    return hwt906.isReady();
+}
+
+void calibrateHWT906() {
+    hwt906.startCalibration();
+}
+
+void zeroHWT906Angles() {
+    hwt906.saveCurrentAsZero();
+}
+
+// === STEP X1: API WRAPPER RAW DATA ===
+float getHWT906PitchRaw() {
+    return hwt906.getPitchRawUART();
+}
+
+float getHWT906YawRaw() {
+    return hwt906.getYawRawUART();
+}
+
+float getHWT906RollRaw() {
+    return hwt906.getRollRawUART();
+}
+
+HWT906RawData getHWT906RawData() {
+    return hwt906.getRawData();
 }

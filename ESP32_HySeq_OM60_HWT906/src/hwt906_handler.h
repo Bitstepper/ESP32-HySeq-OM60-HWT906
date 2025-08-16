@@ -1,5 +1,7 @@
 // hwt906_handler.h - Versione unificata basata su WIT9-proto funzionante
 // Migrazione completa dei filtri e parsing stabili
+// STEP X1: AGGIUNTA VALORI RAW per test ripetibilità 
+// STEP X2: DUAL-MODE QUATERNIONS + EULER per anti-gimbal lock
 
 #ifndef HWT906_HANDLER_H
 #define HWT906_HANDLER_H
@@ -19,6 +21,7 @@
 #define FRAME_GYRO 0x52  
 #define FRAME_ANGLE 0x53
 #define FRAME_MAG 0x54
+#define FRAME_QUATERNION 0x59         // STEP X2: AGGIUNTO per quaternioni
 #define FRAME_SIZE 11
 
 // === PRECISIONE OTTIMIZZATA (dal WIT9-proto) ===
@@ -37,6 +40,15 @@ struct HWT906PrecisionConfig {
     uint16_t gyro_threshold;   
     uint16_t gyro_cal_time;    
     const char* description;
+};
+
+// === STRUTTURA DATI RAW (STEP X1 - per testing ripetibilità) ===
+struct HWT906RawData {
+    float pitch_raw_uart;    // Direttamente da frame UART
+    float yaw_raw_uart;      // Senza filtri/compensazioni
+    float roll_raw_uart;     // Per completezza
+    uint32_t timestamp_raw;  // Per sincronizzazione
+    bool valid;              // Frame valido ricevuto
 };
 
 // === FILTRI AVANZATI MULTI-STADIO (dal WIT9-proto) ===
@@ -97,6 +109,20 @@ struct HWT906Data {
     float pitch_raw = 0.0f, yaw_raw = 0.0f, roll_raw = 0.0f;
     float pitch_filtered = 0.0f, yaw_filtered = 0.0f, roll_filtered = 0.0f;
     
+    // === STEP X2: QUATERNIONS SUPPORT ===
+    float qw_raw = 1.0f, qx_raw = 0.0f, qy_raw = 0.0f, qz_raw = 0.0f;           // Raw da UART
+    float qw_filtered = 1.0f, qx_filtered = 0.0f, qy_filtered = 0.0f, qz_filtered = 0.0f;  // Filtered
+    float pitch_Q = 0.0f, yaw_Q = 0.0f, roll_Q = 0.0f;                          // Eulero da Q raw
+    float pitch_Q_filtered = 0.0f, yaw_Q_filtered = 0.0f, roll_Q_filtered = 0.0f; // Eulero da Q filtered
+    
+    // Status quaternioni
+    bool quaternion_available = false;
+    bool gimbal_lock_detected = false;
+    bool quaternion_mode_active = false;
+    uint32_t last_quaternion_time = 0;
+    uint32_t quaternion_frames_received = 0;
+    uint32_t euler_frames_received = 0;
+    
     // Accelerometro/Giroscopio/Magnetometro raw
     float ax = 0.0f, ay = 0.0f, az = 0.0f;
     float gx = 0.0f, gy = 0.0f, gz = 0.0f;
@@ -133,6 +159,9 @@ private:
     DriftCompensation drift;
     HardwareSerial* uart = nullptr;
     
+    // STEP X1: STORAGE DATI RAW
+    HWT906RawData rawData;
+    
     uint8_t frame_buffer[FRAME_SIZE];
     int frame_index = 0;
     bool frame_started = false;
@@ -166,6 +195,14 @@ private:
     void processAccelFrame(uint8_t* frame);
     void processGyroFrame(uint8_t* frame);
     void processMagFrame(uint8_t* frame);
+    
+    // === STEP X2: METODI QUATERNIONI ===
+    void processQuaternionFrame(uint8_t* frame);
+    void convertQuaternionToEuler();
+    void convertQuaternionToEulerFiltered();
+    void applyQuaternionFilters();
+    void detectGimbalLock();
+    void normalizeQuaternion(float& qw, float& qx, float& qy, float& qz);
     
     // FILTRI MULTI-STADIO completi dal WIT9-proto
     void initAdvancedFilters();
@@ -216,6 +253,34 @@ public:
     float getYawRaw() { return currentData.yaw_raw; }
     float getRollRaw() { return currentData.roll_raw; }
     
+    // === STEP X1: GETTERS RAW DATA (per test ripetibilità) ===
+    float getPitchRawUART() { return rawData.pitch_raw_uart; }
+    float getYawRawUART() { return rawData.yaw_raw_uart; }
+    float getRollRawUART() { return rawData.roll_raw_uart; }
+    HWT906RawData getRawData() { return rawData; }
+    bool isRawDataValid() { return rawData.valid; }
+    
+    // === STEP X2: API QUATERNIONI ===
+    // Getters quaternioni raw
+    float getQuaternionW() { return currentData.qw_raw; }
+    float getQuaternionX() { return currentData.qx_raw; }
+    float getQuaternionY() { return currentData.qy_raw; }
+    float getQuaternionZ() { return currentData.qz_raw; }
+    
+    // Getters Eulero da quaternioni
+    float getPitchQ() { return currentData.pitch_Q; }
+    float getYawQ() { return currentData.yaw_Q; }
+    float getRollQ() { return currentData.roll_Q; }
+    
+    // Getters Eulero da quaternioni filtrati
+    float getPitchQFiltered() { return currentData.pitch_Q_filtered; }
+    float getYawQFiltered() { return currentData.yaw_Q_filtered; }
+    float getRollQFiltered() { return currentData.roll_Q_filtered; }
+    
+    // Status
+    bool isGimbalLockDetected() { return currentData.gimbal_lock_detected; }
+    bool isQuaternionModeActive() { return currentData.quaternion_mode_active; }
+    
     // Stato sistema
     bool isReady() { return sensors_ready; }
     bool isStatic() { return currentData.is_static; }
@@ -256,5 +321,36 @@ float getHWT906Pitch();
 float getHWT906Yaw();
 float getHWT906Roll();
 bool isHWT906Ready();
+bool isHWT906Present();
+void calibrateHWT906();
+void zeroHWT906Angles();
+
+// === STEP X1: API WRAPPER RAW DATA ===
+float getHWT906PitchRaw();
+float getHWT906YawRaw();
+float getHWT906RollRaw();
+HWT906RawData getHWT906RawData();
+
+// === STEP X2: API WRAPPER QUATERNIONS (AGGIUNTE LE DICHIARAZIONI MANCANTI!) ===
+float getHWT906QuaternionW();
+float getHWT906QuaternionX();
+float getHWT906QuaternionY();
+float getHWT906QuaternionZ();
+
+float getHWT906PitchQ();
+float getHWT906YawQ();
+float getHWT906RollQ();
+
+float getHWT906PitchQFiltered();
+float getHWT906YawQFiltered();
+float getHWT906RollQFiltered();
+
+bool isHWT906GimbalLockDetected();
+
+// === COMPATIBILITY FUNCTIONS (magnetometer stub) ===
+void startMagCalibration();
+bool isMagCalibrationInProgress();
+float getMagCalibrationProgress();
+void finishMagCalibration();
 
 #endif // HWT906_HANDLER_H
